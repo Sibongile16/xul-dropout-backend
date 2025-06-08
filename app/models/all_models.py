@@ -1,179 +1,373 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, Date, DateTime, ForeignKey, JSON, Text, Enum    
+from sqlalchemy import Column, String, Integer, Float, Date, DateTime, Boolean, Text, ForeignKey, Enum as SQLEnum, JSON
+from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
-from app.database import Base
-import enum
+from sqlalchemy.dialects.postgresql import UUID
+from datetime import datetime, date
+from enum import Enum
+import uuid
+from pytz import timezone
 
+Base = declarative_base()
 
-
-class Roles(enum.Enum):
-    ADMIN = "admin"
-    TEACHER = "teacher"
+# Enum Classes
+class UserRole(str, Enum):
     HEADTEACHER = "headteacher"
+    DEPUTY_HEADTEACHER = "deputy_headteacher" 
+    TEACHER = "teacher"
 
-class Gender(enum.Enum):
+class Gender(str, Enum):
     MALE = "male"
     FEMALE = "female"
 
-class Status(enum.Enum):
-    ACTIVE = "active"
-    DROPPED_OUT = "dropped_out"
-    TRANSFERRED = "transferred"
+class RelationshipType(str, Enum):
+    PARENT = "parent"
+    GUARDIAN = "guardian"
+    RELATIVE = "relative"
+    OTHER = "other"
 
-class InterventionStatus(enum.Enum):
-    PLANNED = "planned"
-    ONGOING = "ongoing"
+class IncomeRange(str, Enum):
+    BELOW_50K = "below_50k"
+    RANGE_50K_100K = "50k_100k"
+    RANGE_100K_200K = "100k_200k"
+    ABOVE_200K = "above_200k"
+
+class EducationLevel(str, Enum):
+    NONE = "none"
+    PRIMARY = "primary"
+    SECONDARY = "secondary"
+    TERTIARY = "tertiary"
+
+class TransportMethod(str, Enum):
+    WALKING = "walking"
+    BICYCLE = "bicycle"
+    PUBLIC_TRANSPORT = "public_transport"
+    PRIVATE_TRANSPORT = "private_transport"
+
+class StudentStatus(str, Enum):
     COMPLETED = "completed"
+    REPEATED = "repeated"
+    TRANSFERRED = "transferred"
+    DROPPED_OUT = "dropped_out"
 
+class AttendanceStatus(str, Enum):
+    PRESENT = "present"
+    ABSENT = "absent"
+    LATE = "late"
+    EXCUSED = "excused"
 
-class RiskCategory(enum.Enum):
+class AssessmentType(str, Enum):
+    TEST = "test"
+    EXAM = "exam"
+    ASSIGNMENT = "assignment"
+    CONTINUOUS_ASSESSMENT = "continuous_assessment"
+
+class Term(str, Enum):
+    TERM1 = "term1"
+    TERM2 = "term2"
+    TERM3 = "term3"
+
+class BullyingType(str, Enum):
+    PHYSICAL = "physical"
+    VERBAL = "verbal"
+    CYBER = "cyber"
+    SOCIAL_EXCLUSION = "social_exclusion"
+    OTHER = "other"
+
+class Location(str, Enum):
+    CLASSROOM = "classroom"
+    PLAYGROUND = "playground"
+    TOILET = "toilet"
+    CORRIDOR = "corridor"
+    OUTSIDE_SCHOOL = "outside_school"
+    OTHER = "other"
+
+class SeverityLevel(str, Enum):
     LOW = "low"
     MEDIUM = "medium"
-    HIGH = "high" 
+    HIGH = "high"
+    CRITICAL = "critical"
 
+class IncidentStatus(str, Enum):
+    REPORTED = "reported"
+    INVESTIGATING = "investigating"
+    RESOLVED = "resolved"
+    ESCALATED = "escalated"
 
+class RiskFactorType(str, Enum):
+    ECONOMIC = "economic"
+    FAMILY = "family"
+    ACADEMIC = "academic"
+    SOCIAL = "social"
+    HEALTH = "health"
+    BEHAVIORAL = "behavioral"
+
+class RiskLevel(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+# Model Classes
 class User(Base):
-    __tablename__ = 'users'
+    __tablename__ = "users"
     
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String(50), unique=True, index=True)
-    email = Column(String(100), unique=True, index=True)
-    hashed_password = Column(String(255))
-    role = Column(Enum(Roles), nullable=False)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    username = Column(String(50), unique=True, nullable=False)
+    email = Column(String(100), unique=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    role = Column(SQLEnum(UserRole), nullable=False)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime)
-    last_login = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
+    updated_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")), onupdate=datetime.now(timezone("Africa/Harare")))
     
-    # Relationships
-    teacher_profile = relationship("Teacher", back_populates="user", uselist=False)
-    student_records = relationship("StudentRecord", back_populates="recorded_by_user")
-    interventions = relationship("Intervention", back_populates="responsible_teacher")
+    # Relationship
+    teacher = relationship("Teacher", back_populates="user", uselist=False)
 
 class Teacher(Base):
-    __tablename__ = 'teachers'
+    __tablename__ = "teachers"
     
-    user_id = Column(Integer, ForeignKey('users.id'), primary_key=True)
-    first_name = Column(String(50))
-    last_name = Column(String(50))
-    phone = Column(String(20))
-    subjects = Column(JSON)
-    qualification = Column(String(100))
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), unique=True, nullable=False)
+    first_name = Column(String(50), nullable=False)
+    last_name = Column(String(50), nullable=False)
+    phone_number = Column(String(20))
+    date_of_birth = Column(Date)
+    gender = Column(SQLEnum(Gender))
+    address = Column(Text)
     hire_date = Column(Date)
+    qualification = Column(String(100))
+    experience_years = Column(Integer)
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
+    updated_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")), onupdate=datetime.now(timezone("Africa/Harare")))
     
     # Relationships
-    user = relationship("User", back_populates="teacher_profile")
-    classes = relationship("ClassEnrollment", back_populates="teacher")
-    head_classes = relationship("SchoolClass", back_populates="head_teacher")
-    interventions = relationship("Intervention", back_populates="responsible_teacher")
+    user = relationship("User", back_populates="teacher")
+    teacher_subjects = relationship("TeacherSubject", back_populates="teacher")
+    teacher_classes = relationship("TeacherClass", back_populates="teacher")
+    attendance_records = relationship("AttendanceRecord", back_populates="teacher")
+    academic_performances = relationship("AcademicPerformance", back_populates="teacher")
+    bullying_incidents = relationship("BullyingIncident", back_populates="teacher")
+    risk_factors = relationship("StudentRiskFactor", back_populates="teacher")
 
-class SchoolClass(Base):
-    __tablename__ = 'classes'
+class Subject(Base):
+    __tablename__ = "subjects"
     
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(50))
-    academic_year = Column(String(20))
-    head_teacher_id = Column(Integer, ForeignKey('teachers.user_id'))
-    classroom = Column(String(20))
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(100), nullable=False)
+    code = Column(String(10), nullable=False)
+    description = Column(Text)
+    is_active = Column(Boolean, default=True)
     
     # Relationships
-    head_teacher = relationship("Teacher", back_populates="head_classes")
+    teacher_subjects = relationship("TeacherSubject", back_populates="subject")
+    academic_performances = relationship("AcademicPerformance", back_populates="subject")
+
+class Class(Base):
+    __tablename__ = "classes"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(50), nullable=False)
+    code = Column(String(10), nullable=False)
+    academic_year = Column(String(9), nullable=False)  # e.g., "2024-2025"
+    capacity = Column(Integer)
+    is_active = Column(Boolean, default=True)
+    
+    # Relationships
+    teacher_classes = relationship("TeacherClass", back_populates="class_")
     students = relationship("Student", back_populates="current_class")
-    teacher_enrollments = relationship("ClassEnrollment", back_populates="school_class")
+    student_class_histories = relationship("StudentClassHistory", back_populates="class_")
+
+class TeacherSubject(Base):
+    __tablename__ = "teacher_subjects"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    teacher_id = Column(UUID(as_uuid=True), ForeignKey("teachers.id"), nullable=False)
+    subject_id = Column(UUID(as_uuid=True), ForeignKey("subjects.id"), nullable=False)
+    academic_year = Column(String(9), nullable=False)
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
+    
+    # Relationships
+    teacher = relationship("Teacher", back_populates="teacher_subjects")
+    subject = relationship("Subject", back_populates="teacher_subjects")
+
+class TeacherClass(Base):
+    __tablename__ = "teacher_classes"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    teacher_id = Column(UUID(as_uuid=True), ForeignKey("teachers.id"), nullable=False)
+    class_id = Column(UUID(as_uuid=True), ForeignKey("classes.id"), nullable=False)
+    is_class_teacher = Column(Boolean, default=False)
+    academic_year = Column(String(9), nullable=False)
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
+    
+    # Relationships
+    teacher = relationship("Teacher", back_populates="teacher_classes")
+    class_ = relationship("Class", back_populates="teacher_classes")
+
+class Guardian(Base):
+    __tablename__ = "guardians"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    first_name = Column(String(50), nullable=False)
+    last_name = Column(String(50), nullable=False)
+    relationship_to_student = Column(SQLEnum(RelationshipType), nullable=False)
+    phone_number = Column(String(20))
+    email = Column(String(100))
+    address = Column(Text)
+    occupation = Column(String(100))
+    monthly_income_range = Column(SQLEnum(IncomeRange))
+    education_level = Column(SQLEnum(EducationLevel))
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
+    updated_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")), onupdate=datetime.now(timezone("Africa/Harare")))
+    
+    # Relationships
+    students = relationship("Student", back_populates="guardian")
 
 class Student(Base):
-    __tablename__ = 'students'
+    __tablename__ = "students"
     
-    id = Column(Integer, primary_key=True, index=True)
-    first_name = Column(String(50))
-    last_name = Column(String(50))
-    date_of_birth = Column(Date)
-    gender = Column(Enum(Gender), nullable=False)
-    address = Column(Text)
-    parent_guardian_name = Column(String(100))
-    parent_guardian_contact = Column(String(20))
-    enrollment_date = Column(Date)
-    current_class_id = Column(Integer, ForeignKey('classes.id'))
-    photo_url = Column(String(255), nullable=True)
-    status = Column(Enum(Status), default=Status.ACTIVE)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    student_number = Column(String(20), unique=True, nullable=False)
+    first_name = Column(String(50), nullable=False)
+    last_name = Column(String(50), nullable=False)
+    date_of_birth = Column(Date, nullable=False)
+    age = Column(Integer)  # Can be calculated
+    gender = Column(SQLEnum(Gender), nullable=False)
+    current_class_id = Column(UUID(as_uuid=True), ForeignKey("classes.id"))
+    guardian_id = Column(UUID(as_uuid=True), ForeignKey("guardians.id"), nullable=False)
+    home_address = Column(Text)
+    distance_to_school_km = Column(Float)
+    transport_method = Column(SQLEnum(TransportMethod))
+    enrollment_date = Column(Date, nullable=False)
+    is_active = Column(Boolean, default=True)
+    special_needs = Column(Text)
+    medical_conditions = Column(Text)
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
+    updated_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")), onupdate=datetime.now(timezone("Africa/Harare")))
     
     # Relationships
-    current_class = relationship("SchoolClass", back_populates="students")
-    records = relationship("StudentRecord", back_populates="student")
-    predictions = relationship("DropoutPrediction", back_populates="student")
-    dropout_cases = relationship("DropoutCase", back_populates="student")
-    interventions = relationship("Intervention", back_populates="student")
+    current_class = relationship("Class", back_populates="students")
+    guardian = relationship("Guardian", back_populates="students")
+    class_histories = relationship("StudentClassHistory", back_populates="student")
+    attendance_records = relationship("AttendanceRecord", back_populates="student")
+    academic_performances = relationship("AcademicPerformance", back_populates="student")
+    bullying_incidents_as_victim = relationship("BullyingIncident", back_populates="victim_student", foreign_keys="BullyingIncident.victim_student_id")
+    bullying_incidents_as_perpetrator = relationship("BullyingIncident", back_populates="perpetrator_student", foreign_keys="BullyingIncident.perpetrator_student_id")
+    risk_factors = relationship("StudentRiskFactor", back_populates="student")
+    dropout_predictions = relationship("DropoutPrediction", back_populates="student")
 
-class ClassEnrollment(Base):
-    __tablename__ = 'class_enrollments'
+class StudentClassHistory(Base):
+    __tablename__ = "student_class_history"
     
-    id = Column(Integer, primary_key=True, index=True)
-    teacher_id = Column(Integer, ForeignKey('teachers.user_id'))
-    class_id = Column(Integer, ForeignKey('classes.id'))
-    subject = Column(String(50))
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    student_id = Column(UUID(as_uuid=True), ForeignKey("students.id"), nullable=False)
+    class_id = Column(UUID(as_uuid=True), ForeignKey("classes.id"), nullable=False)
+    academic_year = Column(String(9), nullable=False)
+    enrollment_date = Column(Date, nullable=False)
+    completion_date = Column(Date)  # NULL if ongoing
+    status = Column(SQLEnum(StudentStatus), nullable=False)
+    reason_for_status_change = Column(Text)
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
     
     # Relationships
-    teacher = relationship("Teacher", back_populates="classes")
-    school_class = relationship("SchoolClass", back_populates="teacher_enrollments")
+    student = relationship("Student", back_populates="class_histories")
+    class_ = relationship("Class", back_populates="student_class_histories")
 
-class StudentRecord(Base):
-    __tablename__ = 'student_records'
+class AttendanceRecord(Base):
+    __tablename__ = "attendance_records"
     
-    id = Column(Integer, primary_key=True, index=True)
-    student_id = Column(Integer, ForeignKey('students.id'))
-    record_date = Column(Date)
-    academic_performance = Column(Float)  # 0-100 scale
-    attendance_rate = Column(Float)  # 0-1 scale
-    behavior_notes = Column(Text, nullable=True)
-    health_notes = Column(Text, nullable=True)
-    family_status = Column(String(50))
-    economic_status = Column(String(50))
-    recorded_by = Column(Integer, ForeignKey('users.id'))
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    student_id = Column(UUID(as_uuid=True), ForeignKey("students.id"), nullable=False)
+    date = Column(Date, nullable=False)
+    status = Column(SQLEnum(AttendanceStatus), nullable=False)
+    reason_for_absence = Column(Text)
+    recorded_by_teacher_id = Column(UUID(as_uuid=True), ForeignKey("teachers.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
     
     # Relationships
-    student = relationship("Student", back_populates="records")
-    recorded_by_user = relationship("User", back_populates="student_records")
+    student = relationship("Student", back_populates="attendance_records")
+    teacher = relationship("Teacher", back_populates="attendance_records")
+
+class AcademicPerformance(Base):
+    __tablename__ = "academic_performance"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    student_id = Column(UUID(as_uuid=True), ForeignKey("students.id"), nullable=False)
+    subject_id = Column(UUID(as_uuid=True), ForeignKey("subjects.id"), nullable=False)
+    assessment_type = Column(SQLEnum(AssessmentType), nullable=False)
+    assessment_name = Column(String(100), nullable=False)
+    marks_obtained = Column(Float, nullable=False)
+    total_marks = Column(Float, nullable=False)
+    percentage = Column(Float)  # Can be calculated
+    grade = Column(String(2))
+    assessment_date = Column(Date, nullable=False)
+    academic_year = Column(String(9), nullable=False)
+    term = Column(SQLEnum(Term), nullable=False)
+    teacher_id = Column(UUID(as_uuid=True), ForeignKey("teachers.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
+    
+    # Relationships
+    student = relationship("Student", back_populates="academic_performances")
+    subject = relationship("Subject", back_populates="academic_performances")
+    teacher = relationship("Teacher", back_populates="academic_performances")
+
+class BullyingIncident(Base):
+    __tablename__ = "bullying_incidents"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    victim_student_id = Column(UUID(as_uuid=True), ForeignKey("students.id"), nullable=False)
+    perpetrator_student_id = Column(UUID(as_uuid=True), ForeignKey("students.id"))
+    incident_date = Column(Date, nullable=False)
+    incident_type = Column(SQLEnum(BullyingType), nullable=False)
+    description = Column(Text, nullable=False)
+    location = Column(SQLEnum(Location), nullable=False)
+    severity_level = Column(SQLEnum(SeverityLevel), nullable=False)
+    reported_by_teacher_id = Column(UUID(as_uuid=True), ForeignKey("teachers.id"), nullable=False)
+    action_taken = Column(Text)
+    follow_up_required = Column(Boolean, default=False)
+    follow_up_date = Column(Date)
+    status = Column(SQLEnum(IncidentStatus), default=IncidentStatus.REPORTED)
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
+    updated_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")), onupdate=datetime.now(timezone("Africa/Harare")))
+    
+    # Relationships
+    victim_student = relationship("Student", back_populates="bullying_incidents_as_victim", foreign_keys=[victim_student_id])
+    perpetrator_student = relationship("Student", back_populates="bullying_incidents_as_perpetrator", foreign_keys=[perpetrator_student_id])
+    teacher = relationship("Teacher", back_populates="bullying_incidents")
+
+class StudentRiskFactor(Base):
+    __tablename__ = "student_risk_factors"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    student_id = Column(UUID(as_uuid=True), ForeignKey("students.id"), nullable=False)
+    factor_type = Column(SQLEnum(RiskFactorType), nullable=False)
+    factor_description = Column(Text, nullable=False)
+    severity_level = Column(SQLEnum(SeverityLevel), nullable=False)
+    identified_date = Column(Date, nullable=False)
+    identified_by_teacher_id = Column(UUID(as_uuid=True), ForeignKey("teachers.id"), nullable=False)
+    mitigation_actions = Column(Text)
+    is_resolved = Column(Boolean, default=False)
+    resolution_date = Column(Date)
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
+    updated_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")), onupdate=datetime.now(timezone("Africa/Harare")))
+    
+    # Relationships
+    student = relationship("Student", back_populates="risk_factors")
+    teacher = relationship("Teacher", back_populates="risk_factors")
 
 class DropoutPrediction(Base):
-    __tablename__ = 'dropout_predictions'
+    __tablename__ = "dropout_predictions"
     
-    id = Column(Integer, primary_key=True, index=True)
-    student_id = Column(Integer, ForeignKey('students.id'))
-    prediction_date = Column(DateTime)
-    risk_score = Column(Float)  # 0-1 probability
-    risk_category = Column(Enum(RiskCategory), nullable=False)
-    important_factors = Column(JSON)  # JSON of contributing factors
-    model_version = Column(String(50))
-    
-    # Relationships
-    student = relationship("Student", back_populates="predictions")
-
-class Intervention(Base):
-    __tablename__ = 'interventions'
-    
-    id = Column(Integer, primary_key=True, index=True)
-    student_id = Column(Integer, ForeignKey('students.id'))
-    intervention_type = Column(String(50))
-    description = Column(Text)
-    start_date = Column(Date)
-    end_date = Column(Date)
-    responsible_teacher_id = Column(Integer, ForeignKey('teachers.user_id'))
-    status = Column(Enum(InterventionStatus), default=InterventionStatus.PLANNED)
-    outcome = Column(Text, nullable=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    student_id = Column(UUID(as_uuid=True), ForeignKey("students.id"), nullable=False)
+    risk_score = Column(Float, nullable=False)  # 0-100
+    risk_level = Column(SQLEnum(RiskLevel), nullable=False)
+    contributing_factors = Column(JSON)  # Array of factor types
+    prediction_date = Column(Date, nullable=False)
+    algorithm_version = Column(String(20))
+    teacher_notified = Column(Boolean, default=False)
+    intervention_recommended = Column(Text)
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
     
     # Relationships
-    student = relationship("Student", back_populates="interventions")
-    responsible_teacher = relationship("Teacher", back_populates="interventions")
-
-class DropoutCase(Base):
-    __tablename__ = 'dropout_cases'
-    
-    id = Column(Integer, primary_key=True, index=True)
-    student_id = Column(Integer, ForeignKey('students.id'))
-    dropout_date = Column(Date)
-    reason = Column(Text)
-    follow_up_actions = Column(Text)
-    is_reversible = Column(Boolean)
-    case_closed = Column(Boolean, default=False)
-    closed_date = Column(Date, nullable=True)
-    
-    # Relationships
-    student = relationship("Student", back_populates="dropout_cases")
+    student = relationship("Student", back_populates="dropout_predictions")
