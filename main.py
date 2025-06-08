@@ -15,6 +15,14 @@ async def root():
     """
     return RedirectResponse(url="/docs")
 
+CORSMiddleware(
+    app=app,
+    allow_origins=["*"],  # Allow all origins for development; restrict in production
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods
+    allow_headers=["*"],  # Allow all headers
+)
+
 
 
 
