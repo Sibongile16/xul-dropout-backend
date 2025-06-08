@@ -17,7 +17,11 @@ async def root():
 
 CORSMiddleware(
     app=app,
-    allow_origins=["*"],  # Allow all origins for development; restrict in production
+    allow_origins=[
+                     "http://localhost:3000",  # React app running on localhost
+                     "http://127.0.1:3000",  # React app running on localhost
+        "*",
+                   ],  # Allow all origins for development; restrict in production
     allow_credentials=True,
     allow_methods=["*"],  # Allow all methods
     allow_headers=["*"],  # Allow all headers
