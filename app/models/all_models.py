@@ -11,8 +11,8 @@ Base = declarative_base()
 
 # Enum Classes
 class UserRole(str, Enum):
+    ADMIN = "admin"
     HEADTEACHER = "headteacher"
-    DEPUTY_HEADTEACHER = "deputy_headteacher" 
     TEACHER = "teacher"
 
 class Gender(str, Enum):
@@ -59,7 +59,6 @@ class AssessmentType(str, Enum):
     TEST = "test"
     EXAM = "exam"
     ASSIGNMENT = "assignment"
-    CONTINUOUS_ASSESSMENT = "continuous_assessment"
 
 class Term(str, Enum):
     TERM1 = "term1"
@@ -92,6 +91,7 @@ class IncidentStatus(str, Enum):
     INVESTIGATING = "investigating"
     RESOLVED = "resolved"
     ESCALATED = "escalated"
+    NOT_REPORTED = "not_reported"
 
 class RiskFactorType(str, Enum):
     ECONOMIC = "economic"
@@ -121,7 +121,14 @@ class User(Base):
     updated_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")), onupdate=datetime.now(timezone("Africa/Harare")))
     
     # Relationship
-    teacher = relationship("Teacher", back_populates="user", uselist=False)
+    # In User model
+    teacher = relationship(
+        "Teacher", 
+        back_populates="user", 
+        uselist=False, 
+        cascade="all, delete-orphan"
+)
+
 
 class Teacher(Base):
     __tablename__ = "teachers"
@@ -168,7 +175,7 @@ class Class(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(50), nullable=False)
     code = Column(String(10), nullable=False)
-    academic_year = Column(String(9), nullable=False)  # e.g., "2024-2025"
+    academic_year = Column(String(9), nullable=False)
     capacity = Column(Integer)
     is_active = Column(Boolean, default=True)
     

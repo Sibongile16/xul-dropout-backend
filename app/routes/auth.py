@@ -1,5 +1,3 @@
-# auth.py - Authentication endpoints and utilities
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from pytz import timezone
 from sqlalchemy.orm import Session
@@ -8,13 +6,15 @@ from datetime import datetime, timedelta
 from typing import Optional
 from uuid import UUID
 
+from app.crud.teacher import get_fullname
 from app.database import get_db
 from app.models.all_models import User, Teacher, UserRole
-from app.utils.auth import ACCESS_TOKEN_EXPIRE_MINUTES, authenticate_user, create_access_token, create_refresh_token, get_current_user, get_password_hash, require_role, verify_password, verify_token
+from app.utils.auth import ACCESS_TOKEN_EXPIRE_MINUTES, authenticate_user, create_access_token, create_refresh_token, get_current_user, get_password_hash, verify_admin, verify_headteacher, verify_password, verify_token
+
+# Router
+router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
 
-
-# Pydantic Models
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -29,7 +29,7 @@ class RefreshTokenRequest(BaseModel):
     refresh_token: str
 
 class UserInfo(BaseModel):
-    id: str
+    id: UUID
     username: str
     email: str
     role: UserRole
@@ -42,10 +42,8 @@ class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
 
-# Router
-router = APIRouter(prefix="/auth", tags=["Authentication"])
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=TokenResponse, status_code=status.HTTP_200_OK)
 async def login(
     login_data: LoginRequest,
     db: Session = Depends(get_db)
@@ -65,7 +63,7 @@ async def login(
     # Create tokens
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": str(user.id), "username": user.username, "role": user.role.value},
+        data={"sub": str(user.id), "name":get_fullname(user.teacher), "username": user.username, "role": user.role},
         expires_delta=access_token_expires
     )
     
@@ -79,7 +77,7 @@ async def login(
         expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
 
-@router.post("/refresh", response_model=TokenResponse)
+@router.post("/refresh", response_model=TokenResponse, status_code=status.HTTP_200_OK)
 async def refresh_token(
     refresh_data: RefreshTokenRequest,
     db: Session = Depends(get_db)
@@ -113,7 +111,7 @@ async def refresh_token(
     # Create new tokens
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": str(user.id), "username": user.username, "role": user.role.value},
+        data={"sub": str(user.id), "name":get_fullname(user.teacher), "username": user.username, "role": user.role.value},
         expires_delta=access_token_expires
     )
     
@@ -127,7 +125,7 @@ async def refresh_token(
         expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
 
-@router.get("/me", response_model=UserInfo)
+@router.get("/me", response_model=UserInfo, status_code=status.HTTP_200_OK)
 async def get_current_user_info(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -138,7 +136,7 @@ async def get_current_user_info(
     teacher_info = None
     if current_user.teacher:
         teacher_info = {
-            "id": str(current_user.teacher.id),
+            "id": current_user.teacher.id,
             "first_name": current_user.teacher.first_name,
             "last_name": current_user.teacher.last_name,
             "phone_number": current_user.teacher.phone_number,
@@ -147,7 +145,7 @@ async def get_current_user_info(
         }
     
     return UserInfo(
-        id=str(current_user.id),
+        id=current_user.id,
         username=current_user.username,
         email=current_user.email,
         role=current_user.role,
@@ -188,7 +186,7 @@ async def logout(current_user: User = Depends(get_current_user)):
 # Role-based access examples
 @router.get("/admin-only")
 async def admin_only_endpoint(
-    current_user: User = Depends(require_role([UserRole.HEADTEACHER]))
+    current_user: User = Depends(verify_admin)
 ):
     """
     Example endpoint that only headteachers can access
@@ -197,11 +195,7 @@ async def admin_only_endpoint(
 
 @router.get("/teachers-and-admin")
 async def teachers_and_admin_endpoint(
-    current_user: User = Depends(require_role([
-        UserRole.HEADTEACHER, 
-        UserRole.DEPUTY_HEADTEACHER, 
-        UserRole.TEACHER
-    ]))
+    current_user: User = Depends(get_current_user)
 ):
     """
     Example endpoint that teachers and admin can access
@@ -219,7 +213,7 @@ class CreateUserRequest(BaseModel):
 @router.post("/create-user")
 async def create_user(
     user_data: CreateUserRequest,
-    current_user: User = Depends(require_role([UserRole.HEADTEACHER])),
+    current_user: User = Depends(verify_admin),  
     db: Session = Depends(get_db)
 ):
     """
@@ -248,7 +242,7 @@ async def create_user(
     db.flush()  # To get the user ID
     
     # Create teacher profile if teacher info is provided
-    if user_data.teacher_info and user_data.role in [UserRole.TEACHER, UserRole.DEPUTY_HEADTEACHER, UserRole.HEADTEACHER]:
+    if user_data.teacher_info and user_data.role in [UserRole.TEACHER, UserRole.HEADTEACHER]:
         teacher = Teacher(
             user_id=new_user.id,
             first_name=user_data.teacher_info.get("first_name", ""),

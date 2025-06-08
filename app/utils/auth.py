@@ -106,13 +106,39 @@ def get_current_user(
     
     return user
 
-def require_role(allowed_roles: list[UserRole]):
-    """Decorator to require specific user roles"""
-    def role_checker(current_user: User = Depends(get_current_user)) -> User:
-        if current_user.role not in allowed_roles:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not enough permissions"
-            )
-        return current_user
-    return role_checker
+
+
+def verify_teacher(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    """Ensure the current user is a teacher"""
+    if current_user.role != UserRole.TEACHER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to perform this action"
+        )
+    return current_user
+
+def verify_headteacher(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    """Ensure the current user is a head teacher"""
+    if current_user.role != UserRole.HEADTEACHER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to perform this action"
+        )
+    return current_user
+
+
+def verify_admin(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    """Ensure the current user is an admin"""
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to perform this action"
+        )
+    return current_user
+
