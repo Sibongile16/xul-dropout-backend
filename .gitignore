@@ -18,6 +18,7 @@ lib/
 lib64/
 parts/
 sdist/
+test/
 var/
 wheels/
 share/python-wheels/
@@ -67,7 +68,7 @@ instance/
 
 # Scrapy stuff:
 .scrapy
-
+test.py
 # Sphinx documentation
 docs/_build/
 
