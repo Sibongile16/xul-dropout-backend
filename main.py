@@ -2,10 +2,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from app.routes import auth
+from app.middleware import add_cors_middleware
+
 
 app = FastAPI(title="School Management System", description="A system for managing a school", version="1.0.0")
+add_cors_middleware(app)
 
-app.include_router(auth.router)
 
 
 @app.get("/", include_in_schema=False)
@@ -15,19 +17,7 @@ async def root():
     """
     return RedirectResponse(url="/docs")
 
-CORSMiddleware(
-    app=app,
-    allow_origins=[
-                     "http://localhost:3000",  # React app running on localhost
-                     "http://127.0.1:3000",  # React app running on localhost
-        "*",
-                   ],  # Allow all origins for development; restrict in production
-    allow_credentials=True,
-    allow_methods=["*"],  # Allow all methods
-    allow_headers=["*"],  # Allow all headers
-)
-
-
+app.include_router(auth.router)
 
 
 
