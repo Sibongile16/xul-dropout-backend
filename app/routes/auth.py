@@ -176,31 +176,7 @@ async def change_password(
     
     return {"message": "Password updated successfully"}
 
-@router.post("/logout")
-async def logout(current_user: User = Depends(get_current_user)):
-    """
-    Logout endpoint (client should discard tokens)
-    """
-    return {"message": "Successfully logged out"}
 
-# Role-based access examples
-@router.get("/admin-only")
-async def admin_only_endpoint(
-    current_user: User = Depends(verify_admin)
-):
-    """
-    Example endpoint that only headteachers can access
-    """
-    return {"message": "This is an admin-only endpoint", "user": current_user.username}
-
-@router.get("/teachers-and-admin")
-async def teachers_and_admin_endpoint(
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Example endpoint that teachers and admin can access
-    """
-    return {"message": "This endpoint is for teachers and admin", "user": current_user.username}
 
 # User creation endpoint (for initial setup or admin use)
 class CreateUserRequest(BaseModel):

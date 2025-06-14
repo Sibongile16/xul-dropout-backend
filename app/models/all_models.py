@@ -117,8 +117,8 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     role = Column(SQLEnum(UserRole), nullable=False)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
-    updated_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")), onupdate=datetime.now(timezone("Africa/Harare")))
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")))
+    updated_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")), onupdate=datetime.now(timezone("Africa/Blantyre")))
     
     # Relationship
     # In User model
@@ -144,8 +144,8 @@ class Teacher(Base):
     hire_date = Column(Date)
     qualification = Column(String(100))
     experience_years = Column(Integer)
-    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
-    updated_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")), onupdate=datetime.now(timezone("Africa/Harare")))
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")))
+    updated_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")), onupdate=datetime.now(timezone("Africa/Blantyre")))
     
     # Relationships
     user = relationship("User", back_populates="teacher")
@@ -191,7 +191,7 @@ class TeacherSubject(Base):
     teacher_id = Column(UUID(as_uuid=True), ForeignKey("teachers.id"), nullable=False)
     subject_id = Column(UUID(as_uuid=True), ForeignKey("subjects.id"), nullable=False)
     academic_year = Column(String(9), nullable=False)
-    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")))
     
     # Relationships
     teacher = relationship("Teacher", back_populates="teacher_subjects")
@@ -205,7 +205,7 @@ class TeacherClass(Base):
     class_id = Column(UUID(as_uuid=True), ForeignKey("classes.id"), nullable=False)
     is_class_teacher = Column(Boolean, default=False)
     academic_year = Column(String(9), nullable=False)
-    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")))
     
     # Relationships
     teacher = relationship("Teacher", back_populates="teacher_classes")
@@ -224,8 +224,8 @@ class Guardian(Base):
     occupation = Column(String(100))
     monthly_income_range = Column(SQLEnum(IncomeRange))
     education_level = Column(SQLEnum(EducationLevel))
-    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
-    updated_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")), onupdate=datetime.now(timezone("Africa/Harare")))
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")))
+    updated_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")), onupdate=datetime.now(timezone("Africa/Blantyre")))
     
     # Relationships
     students = relationship("Student", back_populates="guardian")
@@ -249,8 +249,8 @@ class Student(Base):
     is_active = Column(Boolean, default=True)
     special_needs = Column(Text)
     medical_conditions = Column(Text)
-    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
-    updated_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")), onupdate=datetime.now(timezone("Africa/Harare")))
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")))
+    updated_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")), onupdate=datetime.now(timezone("Africa/Blantyre")))
     
     # Relationships
     current_class = relationship("Class", back_populates="students")
@@ -274,7 +274,7 @@ class StudentClassHistory(Base):
     completion_date = Column(Date)  # NULL if ongoing
     status = Column(SQLEnum(StudentStatus), nullable=False)
     reason_for_status_change = Column(Text)
-    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")))
     
     # Relationships
     student = relationship("Student", back_populates="class_histories")
@@ -289,7 +289,7 @@ class AttendanceRecord(Base):
     status = Column(SQLEnum(AttendanceStatus), nullable=False)
     reason_for_absence = Column(Text)
     recorded_by_teacher_id = Column(UUID(as_uuid=True), ForeignKey("teachers.id"), nullable=False)
-    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")))
     
     # Relationships
     student = relationship("Student", back_populates="attendance_records")
@@ -311,7 +311,7 @@ class AcademicPerformance(Base):
     academic_year = Column(String(9), nullable=False)
     term = Column(SQLEnum(Term), nullable=False)
     teacher_id = Column(UUID(as_uuid=True), ForeignKey("teachers.id"), nullable=False)
-    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")))
     
     # Relationships
     student = relationship("Student", back_populates="academic_performances")
@@ -334,8 +334,8 @@ class BullyingIncident(Base):
     follow_up_required = Column(Boolean, default=False)
     follow_up_date = Column(Date)
     status = Column(SQLEnum(IncidentStatus), default=IncidentStatus.REPORTED)
-    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
-    updated_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")), onupdate=datetime.now(timezone("Africa/Harare")))
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")))
+    updated_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")), onupdate=datetime.now(timezone("Africa/Blantyre")))
     
     # Relationships
     victim_student = relationship("Student", back_populates="bullying_incidents_as_victim", foreign_keys=[victim_student_id])
@@ -355,8 +355,8 @@ class StudentRiskFactor(Base):
     mitigation_actions = Column(Text)
     is_resolved = Column(Boolean, default=False)
     resolution_date = Column(Date)
-    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
-    updated_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")), onupdate=datetime.now(timezone("Africa/Harare")))
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")))
+    updated_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")), onupdate=datetime.now(timezone("Africa/Blantyre")))
     
     # Relationships
     student = relationship("Student", back_populates="risk_factors")
@@ -374,7 +374,7 @@ class DropoutPrediction(Base):
     algorithm_version = Column(String(20))
     teacher_notified = Column(Boolean, default=False)
     intervention_recommended = Column(Text)
-    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Harare")))
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")))
     
     # Relationships
     student = relationship("Student", back_populates="dropout_predictions")
