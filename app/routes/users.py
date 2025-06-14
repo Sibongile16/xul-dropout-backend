@@ -18,6 +18,7 @@ router = APIRouter(prefix="/api/users", tags=["users"])
 class TeacherBase(BaseModel):
     first_name: str = Field(..., min_length=1, max_length=50)
     last_name: str = Field(..., min_length=1, max_length=50)
+    username:str
     email: EmailStr
     phone_number: Optional[str] = Field(
         None, 
@@ -108,6 +109,7 @@ async def create_teacher(
     
     # Create user account
     new_user = User(
+        username = teacher_data.username,
         email=teacher_data.email,
         password_hash=get_password_hash(teacher_data.password),
         role=teacher_data.role,

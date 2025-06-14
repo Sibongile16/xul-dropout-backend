@@ -178,57 +178,57 @@ async def change_password(
 
 
 
-# User creation endpoint (for initial setup or admin use)
-class CreateUserRequest(BaseModel):
-    username: str
-    email: EmailStr
-    password: str
-    role: UserRole
-    teacher_info: Optional[dict] = None
+# # User creation endpoint (for initial setup or admin use)
+# class CreateUserRequest(BaseModel):
+#     username: str
+#     email: EmailStr
+#     password: str
+#     role: UserRole
+#     teacher_info: Optional[dict] = None
 
-@router.post("/create-user")
-async def create_user(
-    user_data: CreateUserRequest,
-    current_user: User = Depends(verify_admin),  
-    db: Session = Depends(get_db)
-):
-    """
-    Create a new user (only headteachers can create users)
-    """
-    # Check if username or email already exists
-    existing_user = db.query(User).filter(
-        (User.username == user_data.username) | (User.email == user_data.email)
-    ).first()
+# @router.post("/create-user")
+# async def create_user(
+#     user_data: CreateUserRequest,
+#     current_user: User = Depends(verify_admin),  
+#     db: Session = Depends(get_db)
+# ):
+#     """
+#     Create a new user (only headteachers can create users)
+#     """
+#     # Check if username or email already exists
+#     existing_user = db.query(User).filter(
+#         (User.username == user_data.username) | (User.email == user_data.email)
+#     ).first()
     
-    if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Username or email already registered"
-        )
+#     if existing_user:
+#         raise HTTPException(
+#             status_code=status.HTTP_400_BAD_REQUEST,
+#             detail="Username or email already registered"
+#         )
     
-    # Create new user
-    new_user = User(
-        username=user_data.username,
-        email=user_data.email,
-        password_hash=get_password_hash(user_data.password),
-        role=user_data.role
-    )
+#     # Create new user
+#     new_user = User(
+#         username=user_data.username,
+#         email=user_data.email,
+#         password_hash=get_password_hash(user_data.password),
+#         role=user_data.role
+#     )
     
-    db.add(new_user)
-    db.flush()  # To get the user ID
+#     db.add(new_user)
+#     db.flush()  # To get the user ID
     
-    # Create teacher profile if teacher info is provided
-    if user_data.teacher_info and user_data.role in [UserRole.TEACHER, UserRole.HEADTEACHER]:
-        teacher = Teacher(
-            user_id=new_user.id,
-            first_name=user_data.teacher_info.get("first_name", ""),
-            last_name=user_data.teacher_info.get("last_name", ""),
-            phone_number=user_data.teacher_info.get("phone_number"),
-            qualification=user_data.teacher_info.get("qualification"),
-            experience_years=user_data.teacher_info.get("experience_years", 0)
-        )
-        db.add(teacher)
+#     # Create teacher profile if teacher info is provided
+#     if user_data.teacher_info and user_data.role in [UserRole.TEACHER, UserRole.HEADTEACHER]:
+#         teacher = Teacher(
+#             user_id=new_user.id,
+#             first_name=user_data.teacher_info.get("first_name", ""),
+#             last_name=user_data.teacher_info.get("last_name", ""),
+#             phone_number=user_data.teacher_info.get("phone_number"),
+#             qualification=user_data.teacher_info.get("qualification"),
+#             experience_years=user_data.teacher_info.get("experience_years", 0)
+#         )
+#         db.add(teacher)
     
-    db.commit()
+#     db.commit()
     
-    return {"message": "User created successfully", "user_id": str(new_user.id)}
+#     return {"message": "User created successfully", "user_id": str(new_user.id)}
