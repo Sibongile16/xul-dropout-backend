@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 from datetime import datetime
 from uuid import UUID
-from pydantic import BaseModel, EmailStr, Field, validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from app.database import get_db
 from app.utils.auth import get_current_user, verify_admin, get_password_hash, verify_password
 from app.models.all_models import User, Teacher, UserRole, Gender
@@ -23,7 +23,6 @@ class TeacherBase(BaseModel):
         None, 
         min_length=10, 
         max_length=20,
-        regex=r"^[\+]?[(]?[0-9]{3}[)]?[-\s\.]?[0-9]{3}[-\s\.]?[0-9]{4,6}$"
     )
     gender: Optional[Gender] = None
     qualification: Optional[str] = Field(None, max_length=100)
@@ -34,12 +33,12 @@ class TeacherCreate(TeacherBase):
         ...,
         min_length=8,
         max_length=64,
-        regex=r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$",
         description="Password must contain at least 8 characters, one uppercase, one lowercase, one number and one special character"
     )
     role: UserRole = Field(UserRole.TEACHER)  # Default to TEACHER
 
-    @validator('role')
+    @field_validator('role')
+    @classmethod
     def validate_role(cls, v):
         if v not in [UserRole.TEACHER, UserRole.HEADTEACHER]:
             raise ValueError("Role must be either TEACHER or HEADTEACHER")
@@ -53,7 +52,6 @@ class TeacherUpdate(BaseModel):
         None, 
         min_length=10, 
         max_length=20,
-        regex=r"^[\+]?[(]?[0-9]{3}[)]?[-\s\.]?[0-9]{3}[-\s\.]?[0-9]{4,6}$"
     )
     gender: Optional[Gender] = None
     qualification: Optional[str] = Field(None, max_length=100)
