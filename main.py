@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
-from app.routes import auth, teacher, students, classes
+from app.routes import auth, teacher, students, classes, users
 from app.middleware import add_cors_middleware
 
 
@@ -18,6 +18,7 @@ async def root():
     return RedirectResponse(url="/docs")
 
 app.include_router(auth.router)
+app.include_router(users.router)
 app.include_router(teacher.router)
 app.include_router(students.router)
 app.include_router(classes.router)
