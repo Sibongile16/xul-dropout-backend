@@ -1,262 +1,27 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
-from typing import Optional, List, Dict, Any
+from typing import List, Optional
 import pandas as pd
 import io
 from datetime import datetime, date
 from uuid import UUID
-import re
-from enum import Enum
+
 
 from app.database import get_db
-from app.routes.classes import ClassResponse, get_class_or_404
 from app.utils.auth import get_current_user
 from app.models.all_models import (
-    User, Teacher, Student, Guardian, Class, UserRole, Gender, 
-    RelationshipType, TransportMethod, IncomeRange, EducationLevel,
-    StudentStatus, StudentClassHistory
+    AttendanceStatus, User, Student, Guardian, Class, Gender, RelationshipType, 
+    TransportMethod, IncomeRange, EducationLevel, StudentStatus,
+    StudentClassHistory, AttendanceRecord, DropoutPrediction, UserRole
 )
+from pytz import timezone
 
 router = APIRouter(prefix="/api/students", tags=["students"])
 
-# CSV field mappings and validation
-REQUIRED_STUDENT_FIELDS = [
-    'first_name', 'last_name', 'date_of_birth', 'gender', 'student_number'
-]
-
-OPTIONAL_STUDENT_FIELDS = [
-    'home_address', 'distance_to_school_km', 'transport_method',
-    'special_needs', 'medical_conditions', 'enrollment_date'
-]
-
-REQUIRED_GUARDIAN_FIELDS = [
-    'guardian_first_name', 'guardian_last_name', 'relationship_to_student'
-]
-
-OPTIONAL_GUARDIAN_FIELDS = [
-    'guardian_phone', 'guardian_email', 'guardian_address',
-    'guardian_occupation', 'guardian_income_range', 'guardian_education_level'
-]
-
-def validate_csv_headers(df: pd.DataFrame) -> List[str]:
-    """Validate that required headers are present in the CSV."""
-    errors = []
-    missing_required = []
-    
-    # Check required student fields
-    for field in REQUIRED_STUDENT_FIELDS:
-        if field not in df.columns:
-            missing_required.append(field)
-    
-    # Check required guardian fields
-    for field in REQUIRED_GUARDIAN_FIELDS:
-        if field not in df.columns:
-            missing_required.append(field)
-    
-    if missing_required:
-        errors.append(f"Missing required columns: {', '.join(missing_required)}")
-    
-    return errors
-
-def validate_date(date_str: str) -> Optional[date]:
-    """Validate and parse date string."""
-    if pd.isna(date_str) or str(date_str).strip() == '':
-        return None
-    
-    date_formats = ['%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y', '%d-%m-%Y']
-    
-    for fmt in date_formats:
-        try:
-            return datetime.strptime(str(date_str).strip(), fmt).date()
-        except ValueError:
-            continue
-    
-    raise ValueError(f"Invalid date format: {date_str}")
-
-def validate_enum_value(value: str, enum_class) -> Optional[str]:
-    """Validate enum values."""
-    if pd.isna(value) or str(value).strip() == '':
-        return None
-    
-    value_str = str(value).strip().lower()
-    
-    # Try to match enum values
-    for enum_item in enum_class:
-        if enum_item.value.lower() == value_str:
-            return enum_item
-    
-    # Try common variations for gender
-    if enum_class == Gender:
-        if value_str in ['m', 'boy', 'man']:
-            return Gender.MALE
-        elif value_str in ['f', 'girl', 'woman']:
-            return Gender.FEMALE
-    
-    raise ValueError(f"Invalid {enum_class.__name__}: {value}")
-
-def calculate_age(birth_date: date) -> int:
-    """Calculate age from birth date."""
-    today = date.today()
-    return today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
-
-def validate_phone_number(phone: str) -> Optional[str]:
-    """Validate phone number format."""
-    if pd.isna(phone) or str(phone).strip() == '':
-        return None
-    
-    phone_str = str(phone).strip()
-    # Basic phone validation - adjust regex as needed for your region
-    phone_pattern = r'^[\+]?[0-9\s\-\(\)]{7,15}$'
-    
-    if not re.match(phone_pattern, phone_str):
-        raise ValueError(f"Invalid phone number format: {phone}")
-    
-    return phone_str
-
-def validate_email(email: str) -> Optional[str]:
-    """Validate email format."""
-    if pd.isna(email) or str(email).strip() == '':
-        return None
-    
-    email_str = str(email).strip()
-    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-    
-    if not re.match(email_pattern, email_str):
-        raise ValueError(f"Invalid email format: {email}")
-    
-    return email_str.lower()
-
-def process_student_row(row: pd.Series, row_index: int, class_id: Optional[str] = None) -> tuple:
-    """Process a single row of student data."""
-    errors = []
-    student_data = {}
-    guardian_data = {}
-    
-    try:
-        # Process required student fields
-        student_data['first_name'] = str(row['first_name']).strip()
-        student_data['last_name'] = str(row['last_name']).strip()
-        student_data['student_number'] = str(row['student_number']).strip()
-        
-        # Validate date of birth
-        try:
-            dob = validate_date(row['date_of_birth'])
-            if not dob:
-                errors.append(f"Row {row_index}: date_of_birth is required")
-            else:
-                student_data['date_of_birth'] = dob
-                student_data['age'] = calculate_age(dob)
-        except ValueError as e:
-            errors.append(f"Row {row_index}: {str(e)}")
-        
-        # Validate gender
-        try:
-            gender = validate_enum_value(row['gender'], Gender)
-            if not gender:
-                errors.append(f"Row {row_index}: gender is required")
-            else:
-                student_data['gender'] = gender
-        except ValueError as e:
-            errors.append(f"Row {row_index}: {str(e)}")
-        
-        # Process optional student fields
-        if 'home_address' in row and not pd.isna(row['home_address']):
-            student_data['home_address'] = str(row['home_address']).strip()
-        
-        if 'distance_to_school_km' in row and not pd.isna(row['distance_to_school_km']):
-            try:
-                student_data['distance_to_school_km'] = float(row['distance_to_school_km'])
-            except ValueError:
-                errors.append(f"Row {row_index}: Invalid distance_to_school_km")
-        
-        if 'transport_method' in row:
-            try:
-                transport = validate_enum_value(row['transport_method'], TransportMethod)
-                if transport:
-                    student_data['transport_method'] = transport
-            except ValueError as e:
-                errors.append(f"Row {row_index}: {str(e)}")
-        
-        if 'special_needs' in row and not pd.isna(row['special_needs']):
-            student_data['special_needs'] = str(row['special_needs']).strip()
-        
-        if 'medical_conditions' in row and not pd.isna(row['medical_conditions']):
-            student_data['medical_conditions'] = str(row['medical_conditions']).strip()
-        
-        if 'enrollment_date' in row:
-            try:
-                enrollment_date = validate_date(row['enrollment_date'])
-                if enrollment_date:
-                    student_data['enrollment_date'] = enrollment_date
-            except ValueError as e:
-                errors.append(f"Row {row_index}: {str(e)}")
-        
-        if not student_data.get('enrollment_date'):
-            student_data['enrollment_date'] = date.today()
-        
-        # Set class if provided
-        if class_id:
-            student_data['current_class_id'] = class_id
-        
-        # Process guardian data
-        guardian_data['first_name'] = str(row['guardian_first_name']).strip()
-        guardian_data['last_name'] = str(row['guardian_last_name']).strip()
-        
-        # Validate relationship
-        try:
-            relationship = validate_enum_value(row['relationship_to_student'], RelationshipType)
-            if not relationship:
-                errors.append(f"Row {row_index}: relationship_to_student is required")
-            else:
-                guardian_data['relationship_to_student'] = relationship
-        except ValueError as e:
-            errors.append(f"Row {row_index}: {str(e)}")
-        
-        # Process optional guardian fields
-        if 'guardian_phone' in row:
-            try:
-                phone = validate_phone_number(row['guardian_phone'])
-                if phone:
-                    guardian_data['phone_number'] = phone
-            except ValueError as e:
-                errors.append(f"Row {row_index}: {str(e)}")
-        
-        if 'guardian_email' in row:
-            try:
-                email = validate_email(row['guardian_email'])
-                if email:
-                    guardian_data['email'] = email
-            except ValueError as e:
-                errors.append(f"Row {row_index}: {str(e)}")
-        
-        if 'guardian_address' in row and not pd.isna(row['guardian_address']):
-            guardian_data['address'] = str(row['guardian_address']).strip()
-        
-        if 'guardian_occupation' in row and not pd.isna(row['guardian_occupation']):
-            guardian_data['occupation'] = str(row['guardian_occupation']).strip()
-        
-        if 'guardian_income_range' in row:
-            try:
-                income = validate_enum_value(row['guardian_income_range'], IncomeRange)
-                if income:
-                    guardian_data['monthly_income_range'] = income
-            except ValueError as e:
-                errors.append(f"Row {row_index}: {str(e)}")
-        
-        if 'guardian_education_level' in row:
-            try:
-                education = validate_enum_value(row['guardian_education_level'], EducationLevel)
-                if education:
-                    guardian_data['education_level'] = education
-            except ValueError as e:
-                errors.append(f"Row {row_index}: {str(e)}")
-        
-    except Exception as e:
-        errors.append(f"Row {row_index}: Unexpected error - {str(e)}")
-    
-    return student_data, guardian_data, errors
+# Pydantic Models
 class GuardianBase(BaseModel):
     first_name: str
     last_name: str
@@ -323,6 +88,15 @@ class StudentResponse(StudentBase):
 class StudentWithGuardianResponse(StudentResponse):
     guardian: GuardianResponse
 
+class ClassResponse(BaseModel):
+    id: UUID
+    name: str
+    code: str
+    academic_year: str
+
+    class Config:
+        from_attributes = True
+
 class StudentWithClassResponse(StudentResponse):
     current_class: Optional[ClassResponse] = None
 
@@ -331,13 +105,13 @@ class StudentWithDetailsResponse(StudentWithGuardianResponse, StudentWithClassRe
 
 class StudentClassHistoryResponse(BaseModel):
     id: UUID
-    student_id: UUID
     class_id: UUID
     academic_year: str
     enrollment_date: date
     completion_date: Optional[date] = None
     status: StudentStatus
     reason_for_status_change: Optional[str] = None
+    class_info: ClassResponse
 
     class Config:
         from_attributes = True
@@ -345,6 +119,14 @@ class StudentClassHistoryResponse(BaseModel):
 class StudentListResponse(BaseModel):
     students: List[StudentWithDetailsResponse]
     total_count: int
+
+class StudentRiskResponse(BaseModel):
+    id: UUID
+    name: str
+    risk_score: float
+    risk_level: str
+    absences: int
+    current_class: Optional[str] = None
 
 class UploadResponse(BaseModel):
     message: str
@@ -359,7 +141,7 @@ class ValidationError(BaseModel):
     value: str
     error: str
 
-# Helper functions
+# Helper Functions
 def get_student_or_404(db: Session, student_id: UUID):
     student = db.query(Student).filter(Student.id == student_id).first()
     if not student:
@@ -372,14 +154,18 @@ def get_guardian_or_404(db: Session, guardian_id: UUID):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Guardian not found")
     return guardian
 
-# Student CRUD endpoints
+def calculate_age(birth_date: date) -> int:
+    today = date.today()
+    return today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+
+# Student CRUD Endpoints
 @router.post("", response_model=StudentResponse, status_code=status.HTTP_201_CREATED)
 async def create_student(
     student_data: StudentCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Check if student number already exists
+    # Check if student number exists
     existing_student = db.query(Student).filter(
         Student.student_number == student_data.student_number
     ).first()
@@ -387,7 +173,7 @@ async def create_student(
     if existing_student:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Student with this student number already exists"
+            detail="Student with this number already exists"
         )
     
     # Validate guardian exists
@@ -395,12 +181,16 @@ async def create_student(
     
     # Validate class exists if provided
     if student_data.current_class_id:
-        get_class_or_404(db, student_data.current_class_id)
+        class_ = db.query(Class).filter(Class.id == student_data.current_class_id).first()
+        if not class_:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Class not found"
+            )
     
     # Calculate age
     age = calculate_age(student_data.date_of_birth)
     
-    # Create student
     db_student = Student(
         **student_data.model_dump(),
         age=age
@@ -463,7 +253,7 @@ async def update_student(
 ):
     db_student = get_student_or_404(db, student_id)
     
-    # Validate student number if being updated
+    # Validate student number
     if student_data.student_number and student_data.student_number != db_student.student_number:
         existing = db.query(Student).filter(
             Student.student_number == student_data.student_number,
@@ -472,18 +262,23 @@ async def update_student(
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Student with this student number already exists"
+                detail="Student number already exists"
             )
     
-    # Validate guardian exists if being updated
+    # Validate guardian exists
     if student_data.guardian_id:
         get_guardian_or_404(db, student_data.guardian_id)
     
-    # Validate class exists if being updated
+    # Validate class exists
     if student_data.current_class_id:
-        get_class_or_404(db, student_data.current_class_id)
+        class_ = db.query(Class).filter(Class.id == student_data.current_class_id).first()
+        if not class_:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Class not found"
+            )
     
-    # Calculate age if date of birth is being updated
+    # Calculate age if DOB changes
     if student_data.date_of_birth:
         student_data.age = calculate_age(student_data.date_of_birth)
     
@@ -501,7 +296,6 @@ async def delete_student(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Only allow admins to delete students
     if current_user.role != UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -514,7 +308,7 @@ async def delete_student(
     db.refresh(db_student)
     return db_student
 
-# Student history endpoints
+# Student History Endpoints
 @router.get("/{student_id}/history", response_model=List[StudentClassHistoryResponse])
 async def get_student_history(
     student_id: UUID,
@@ -522,13 +316,15 @@ async def get_student_history(
 ):
     get_student_or_404(db, student_id)
     
-    history = db.query(StudentClassHistory).filter(
+    history = db.query(StudentClassHistory).options(
+        joinedload(StudentClassHistory.class_)
+    ).filter(
         StudentClassHistory.student_id == student_id
     ).order_by(StudentClassHistory.academic_year).all()
     
     return history
 
-# Guardian endpoints
+# Guardian Endpoints
 @router.post("/guardians", response_model=GuardianResponse, status_code=status.HTTP_201_CREATED)
 async def create_guardian(
     guardian_data: GuardianCreate,
@@ -563,7 +359,49 @@ async def get_guardian_students(
     
     return query.all()
 
-# CSV Upload endpoints (keep the existing implementation from your code)
+# Risk Assessment Endpoints
+@router.get("/{student_id}/risk", response_model=StudentRiskResponse)
+async def get_student_risk(
+    student_id: UUID,
+    db: Session = Depends(get_db)
+):
+    student = get_student_or_404(db, student_id)
+    
+    # Get latest prediction
+    prediction = db.query(DropoutPrediction).filter(
+        DropoutPrediction.student_id == student_id
+    ).order_by(DropoutPrediction.prediction_date.desc()).first()
+    
+    # Get absences in current academic year
+    academic_year = student.current_class.academic_year if student.current_class else str(datetime.now().year)
+    year_start, year_end = get_academic_year_dates(academic_year)
+    
+    absences = db.query(func.count(AttendanceRecord.id)).filter(
+        AttendanceRecord.student_id == student_id,
+        AttendanceRecord.status == AttendanceStatus.ABSENT,
+        AttendanceRecord.date >= year_start,
+        AttendanceRecord.date <= year_end
+    ).scalar() or 0
+    
+    return StudentRiskResponse(
+        id=student.id,
+        name=f"{student.first_name} {student.last_name}",
+        risk_score=prediction.risk_score if prediction else 0.0,
+        risk_level=prediction.risk_level.value if prediction else "low",
+        absences=absences,
+        current_class=student.current_class.name if student.current_class else None
+    )
+
+# CSV Upload Endpoints (keep existing implementation)
+CSV_FIELDS = [
+    'first_name', 'last_name', 'date_of_birth', 'gender', 'student_number',
+    'home_address', 'distance_to_school_km', 'transport_method',
+    'special_needs', 'medical_conditions', 'enrollment_date',
+    'guardian_first_name', 'guardian_last_name', 'relationship_to_student',
+    'guardian_phone', 'guardian_email', 'guardian_address',
+    'guardian_occupation', 'guardian_income_range', 'guardian_education_level'
+]
+
 @router.post("/upload", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_student_csv(
     file: UploadFile = File(...),
@@ -572,59 +410,189 @@ async def upload_student_csv(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Keep your existing implementation
-    pass
+    # Authorization check
+    if current_user.role not in [UserRole.TEACHER, UserRole.ADMIN, UserRole.HEADTEACHER]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only teachers and administrators can upload student data"
+        )
+    
+    # Validate file type
+    if not file.filename.lower().endswith('.csv'):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only CSV files are accepted"
+        )
+    
+    # Validate class exists if provided
+    if class_id:
+        class_ = db.query(Class).filter(Class.id == class_id).first()
+        if not class_:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Class not found"
+            )
+    
+    try:
+        # Read CSV
+        contents = await file.read()
+        df = pd.read_csv(io.StringIO(contents.decode('utf-8')))
+        
+        if df.empty:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="CSV file is empty"
+            )
+        
+        # Validate headers
+        missing_fields = [field for field in CSV_FIELDS if field not in df.columns]
+        if missing_fields:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Missing required fields: {', '.join(missing_fields)}"
+            )
+        
+        # Process rows
+        records_added = 0
+        records_updated = 0
+        errors = []
+        warnings = []
+        
+        for index, row in df.iterrows():
+            try:
+                # Process student and guardian data
+                student_data = {
+                    'student_number': str(row['student_number']).strip(),
+                    'first_name': str(row['first_name']).strip(),
+                    'last_name': str(row['last_name']).strip(),
+                    'date_of_birth': pd.to_datetime(row['date_of_birth']).date(),
+                    'gender': Gender[row['gender'].lower()],
+                    'enrollment_date': pd.to_datetime(row['enrollment_date']).date() if pd.notna(row['enrollment_date']) else date.today(),
+                    'home_address': str(row['home_address']) if pd.notna(row['home_address']) else None,
+                    'distance_to_school_km': float(row['distance_to_school_km']) if pd.notna(row['distance_to_school_km']) else None,
+                    'transport_method': TransportMethod[row['transport_method'].lower()] if pd.notna(row['transport_method']) else None,
+                    'special_needs': str(row['special_needs']) if pd.notna(row['special_needs']) else None,
+                    'medical_conditions': str(row['medical_conditions']) if pd.notna(row['medical_conditions']) else None,
+                    'current_class_id': class_id
+                }
+                
+                guardian_data = {
+                    'first_name': str(row['guardian_first_name']).strip(),
+                    'last_name': str(row['guardian_last_name']).strip(),
+                    'relationship_to_student': RelationshipType[row['relationship_to_student'].lower()],
+                    'phone_number': str(row['guardian_phone']) if pd.notna(row['guardian_phone']) else None,
+                    'email': str(row['guardian_email']) if pd.notna(row['guardian_email']) else None,
+                    'address': str(row['guardian_address']) if pd.notna(row['guardian_address']) else None,
+                    'occupation': str(row['guardian_occupation']) if pd.notna(row['guardian_occupation']) else None,
+                    'monthly_income_range': IncomeRange[row['guardian_income_range'].lower()] if pd.notna(row['guardian_income_range']) else None,
+                    'education_level': EducationLevel[row['guardian_education_level'].lower()] if pd.notna(row['guardian_education_level']) else None
+                }
+                
+                # Find or create guardian
+                guardian = db.query(Guardian).filter(
+                    Guardian.first_name.ilike(guardian_data['first_name']),
+                    Guardian.last_name.ilike(guardian_data['last_name']),
+                    Guardian.relationship_to_student == guardian_data['relationship_to_student']
+                ).first()
+                
+                if guardian:
+                    # Update existing guardian
+                    for key, value in guardian_data.items():
+                        if value is not None:
+                            setattr(guardian, key, value)
+                    guardian_id = guardian.id
+                else:
+                    # Create new guardian
+                    guardian = Guardian(**guardian_data)
+                    db.add(guardian)
+                    db.flush()
+                    guardian_id = guardian.id
+                
+                # Find or create student
+                student = db.query(Student).filter(
+                    Student.student_number == student_data['student_number']
+                ).first()
+                
+                if student:
+                    # Update existing student
+                    student_data['guardian_id'] = guardian_id
+                    for key, value in student_data.items():
+                        if value is not None:
+                            setattr(student, key, value)
+                    records_updated += 1
+                    warnings.append(f"Updated student {student_data['student_number']}")
+                else:
+                    # Create new student
+                    student_data['guardian_id'] = guardian_id
+                    student_data['age'] = calculate_age(student_data['date_of_birth'])
+                    student = Student(**student_data)
+                    db.add(student)
+                    records_added += 1
+                
+            except Exception as e:
+                errors.append(f"Row {index + 2}: {str(e)}")
+                continue
+        
+        # Commit changes
+        if records_added > 0 or records_updated > 0:
+            try:
+                db.commit()
+            except IntegrityError as e:
+                db.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Database error: {str(e)}"
+                )
+        else:
+            db.rollback()
+        
+        return UploadResponse(
+            message="Upload completed",
+            records_added=records_added,
+            records_updated=records_updated,
+            errors=errors if errors else None,
+            warnings=warnings if warnings else None
+        )
+    
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error processing file: {str(e)}"
+        )
 
 @router.get("/upload/template")
-async def get_csv_template(
-    # current_user: User = Depends(get_current_user)
-):
-    """
-    Download a CSV template for student uploads.
-    """
-    
-    # if current_user.role not in [UserRole.TEACHER, UserRole.ADMIN, UserRole.HEADTEACHER]:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_403_FORBIDDEN,
-    #         detail="Access denied."
-    #     )
-    
-    # Create template headers
-    headers = (
-        REQUIRED_STUDENT_FIELDS + 
-        OPTIONAL_STUDENT_FIELDS + 
-        REQUIRED_GUARDIAN_FIELDS + 
-        OPTIONAL_GUARDIAN_FIELDS
-    )
-    
+async def get_csv_template():
     # Create sample data
     sample_data = {
         'first_name': ['John', 'Jane'],
-        'last_name': ['Banda', 'Mwale'],
+        'last_name': ['Doe', 'Smith'],
         'date_of_birth': ['2010-05-15', '2011-03-22'],
         'gender': ['male', 'female'],
         'student_number': ['STU001', 'STU002'],
-        'home_address': ['123 Main St, Lilongwe', '456 Oak Ave, Blantyre'],
+        'home_address': ['123 Main St', '456 Oak Ave'],
         'distance_to_school_km': [2.5, 1.8],
         'transport_method': ['walking', 'bicycle'],
         'special_needs': ['', 'Hearing impaired'],
         'medical_conditions': ['', 'Asthma'],
-        'enrollment_date': ['2024-01-15', '2024-01-15'],
-        'guardian_first_name': ['Peter', 'Mary'],
-        'guardian_last_name': ['Banda', 'Mwale'],
+        'enrollment_date': ['2023-01-10', '2023-01-10'],
+        'guardian_first_name': ['Mary', 'James'],
+        'guardian_last_name': ['Doe', 'Smith'],
         'relationship_to_student': ['parent', 'parent'],
         'guardian_phone': ['+265991234567', '+265998765432'],
-        'guardian_email': ['peter.banda@email.com', 'mary.mwale@email.com'],
-        'guardian_address': ['123 Main St, Lilongwe', '456 Oak Ave, Blantyre'],
-        'guardian_occupation': ['Teacher', 'Nurse'],
+        'guardian_email': ['mary@example.com', 'james@example.com'],
+        'guardian_address': ['123 Main St', '456 Oak Ave'],
+        'guardian_occupation': ['Teacher', 'Engineer'],
         'guardian_income_range': ['50k_100k', '100k_200k'],
-        'guardian_education_level': ['tertiary', 'tertiary']
+        'guardian_education_level': ['secondary', 'tertiary']
     }
     
-    # Create DataFrame and CSV
-    template_df = pd.DataFrame(sample_data)
+    # Create DataFrame
+    df = pd.DataFrame(sample_data)
+    
+    # Convert to CSV
     csv_buffer = io.StringIO()
-    template_df.to_csv(csv_buffer, index=False)
+    df.to_csv(csv_buffer, index=False)
     
     from fastapi.responses import StreamingResponse
     
@@ -633,3 +601,11 @@ async def get_csv_template(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=student_upload_template.csv"}
     )
+
+def get_academic_year_dates(academic_year: str):
+    try:
+        start_year = int(academic_year.split('-')[0])
+        return date(start_year, 9, 1), date(start_year + 1, 8, 31)
+    except:
+        current_year = datetime.now().year
+        return date(current_year, 1, 1), date(current_year, 12, 31)
