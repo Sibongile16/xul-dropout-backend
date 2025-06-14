@@ -1,20 +1,48 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, func, case
-from typing import List, Optional
-from datetime import datetime, date, timedelta
 from pytz import timezone
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import and_, func, case
+from typing import Dict, List, Optional
+from datetime import datetime, date, timedelta
 from uuid import UUID
+from pydantic import BaseModel
+
 from app.database import get_db
+from app.routes.classes import ClassResponse
+from app.schemas.auth import UserResponse
 from app.utils.auth import get_current_user
 from app.models.all_models import (
-    User, Teacher, Student, Class, AttendanceRecord, DropoutPrediction,
-    TeacherClass, AttendanceStatus, UserRole
+    Gender, User, Teacher, Student, Class, AttendanceRecord, DropoutPrediction,
+    TeacherClass, AttendanceStatus, UserRole, RiskLevel
 )
 
 router = APIRouter(prefix="/api/teachers", tags=["teachers"])
 
-from pydantic import BaseModel
+# Pydantic models
+class TeacherBase(BaseModel):
+    first_name: str
+    last_name: str
+    phone_number: Optional[str] = None
+    gender: Optional[Gender] = None
+    hire_date: Optional[date] = None
+    qualification: Optional[str] = None
+    experience_years: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+class TeacherCreate(TeacherBase):
+    user_id: UUID
+
+class TeacherResponse(TeacherBase):
+    id: UUID
+    is_active: bool
+
+class TeacherWithUserResponse(TeacherResponse):
+    user: UserResponse
+
+class TeacherWithClassesResponse(TeacherResponse):
+    classes: List[ClassResponse]
 
 class StudentRiskResponse(BaseModel):
     id: UUID
@@ -24,6 +52,8 @@ class StudentRiskResponse(BaseModel):
     absences: int
     risk_score: float
     risk_level: str
+    current_class_id: Optional[UUID] = None
+    guardian_contact: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -33,8 +63,122 @@ class StudentListResponse(BaseModel):
     total_count: int
     class_name: str
     academic_year: str
+    teacher_name: str
 
-@router.get("/class/{class_id}", response_model=StudentListResponse)
+class ClassSummaryResponse(BaseModel):
+    class_name: str
+    academic_year: str
+    total_students: int
+    capacity: Optional[int] = None
+    risk_distribution: Dict[str, int]
+    high_risk_students: int
+    attendance_rate: Optional[float] = None
+
+# Helper functions
+def get_teacher_or_404(db: Session, teacher_id: UUID):
+    teacher = db.query(Teacher).filter(Teacher.id == teacher_id).first()
+    if not teacher:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Teacher not found")
+    return teacher
+
+def get_current_academic_year():
+    blantyre_tz = timezone("Africa/Blantyre")
+    now = datetime.now(blantyre_tz)
+    return f"{now.year-1}-{now.year}" if now.month < 9 else f"{now.year}-{now.year+1}"
+
+# Teacher CRUD endpoints
+@router.post("", response_model=TeacherResponse, status_code=status.HTTP_201_CREATED)
+async def create_teacher(
+    teacher_data: TeacherCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Only admins can create teachers
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators can create teacher profiles"
+        )
+    
+    # Check if user exists
+    user = db.query(User).filter(User.id == teacher_data.user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Check if teacher profile already exists for this user
+    existing_teacher = db.query(Teacher).filter(Teacher.user_id == teacher_data.user_id).first()
+    if existing_teacher:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Teacher profile already exists for this user"
+        )
+    
+    db_teacher = Teacher(**teacher_data.model_dump())
+    db.add(db_teacher)
+    db.commit()
+    db.refresh(db_teacher)
+    return db_teacher
+
+@router.get("", response_model=List[TeacherResponse])
+async def get_teachers(
+    is_active: Optional[bool] = None,
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db)
+):
+    query = db.query(Teacher)
+    
+    if is_active is not None:
+        query = query.filter(Teacher.is_active == is_active)
+    
+    return query.offset(skip).limit(limit).all()
+
+@router.get("/{teacher_id}", response_model=TeacherWithClassesResponse)
+async def get_teacher(
+    teacher_id: UUID,
+    academic_year: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    teacher = db.query(Teacher).options(
+        joinedload(Teacher.teacher_classes).joinedload(TeacherClass.class_)
+    ).filter(Teacher.id == teacher_id).first()
+    
+    if not teacher:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Teacher not found")
+    
+    # Filter classes by academic year if provided
+    if academic_year:
+        teacher.teacher_classes = [
+            tc for tc in teacher.teacher_classes 
+            if tc.academic_year == academic_year
+        ]
+    
+    return teacher
+
+@router.get("/{teacher_id}/classes", response_model=List[ClassResponse])
+async def get_teacher_classes(
+    teacher_id: UUID,
+    academic_year: Optional[str] = None,
+    is_class_teacher: Optional[bool] = None,
+    db: Session = Depends(get_db)
+):
+    query = db.query(Class).join(TeacherClass).filter(
+        TeacherClass.teacher_id == teacher_id
+    )
+    
+    if academic_year:
+        query = query.filter(TeacherClass.academic_year == academic_year)
+    
+    if is_class_teacher is not None:
+        query = query.filter(TeacherClass.is_class_teacher == is_class_teacher)
+    
+    return query.all()
+
+# Class management endpoints
+@router.get("/class/{class_id}/students", response_model=StudentListResponse)
 async def get_students_by_class(
     class_id: UUID,
     db: Session = Depends(get_db),
@@ -44,58 +188,53 @@ async def get_students_by_class(
     Get list of students and their risk status for a specific class.
     Only accessible by teachers who are assigned to the class or admins.
     """
-    
+    # Authorization check
     if current_user.role not in [UserRole.TEACHER, UserRole.ADMIN, UserRole.HEADTEACHER]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied. Only teachers and administrators can access this endpoint."
         )
     
-    class_info = db.query(Class).filter(Class.id == class_id).first()
-    if not class_info:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Class not found"
-        )
+    # Get class info with teacher assignment
+    class_info = db.query(Class).options(
+        joinedload(Class.teacher_classes).joinedload(TeacherClass.teacher)
+    ).filter(Class.id == class_id).first()
     
+    if not class_info:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Class not found")
+    
+    # Check teacher assignment if user is teacher
     if current_user.role == UserRole.TEACHER:
         teacher = db.query(Teacher).filter(Teacher.user_id == current_user.id).first()
         if not teacher:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Teacher profile not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Teacher profile not found")
         
-        teacher_class_assignment = db.query(TeacherClass).filter(
-            and_(
-                TeacherClass.teacher_id == teacher.id,
-                TeacherClass.class_id == class_id,
-                TeacherClass.academic_year == class_info.academic_year
-            )
-        ).first()
+        is_assigned = any(
+            tc.teacher_id == teacher.id and tc.academic_year == class_info.academic_year
+            for tc in class_info.teacher_classes
+        )
         
-        if not teacher_class_assignment:
+        if not is_assigned:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied. You are not assigned to this class."
             )
     
-    current_year = datetime.now(timezone("Africa/Blantyre")).year
-    current_month = datetime.now(timezone("Africa/Blantyre")).month
+    # Get current academic year dates
+    academic_year = class_info.academic_year
+    year_start, year_end = 2000, 2001  # Default fallback values
+    if '-' in academic_year:
+        try:
+            year_start, year_end = map(int, academic_year.split('-'))
+            academic_year_start = date(year_start, 1, 1)
+            academic_year_end = date(year_end, 12, 31)
+        except ValueError:
+            academic_year_start = date(year_start, 1, 1)
+            academic_year_end = date(year_start, 12, 31)
     
-    if current_month >= 1:
-        academic_year_start = date(current_year, 1, 1)
-        academic_year_end = date(current_year, 12, 31)
-    else:
-        academic_year_start = date(current_year - 1, 1, 1)
-        academic_year_end = date(current_year - 1, 12, 31)
-    
+    # Get students with absence counts
     students_query = db.query(
-        Student.id,
-        Student.first_name,
-        Student.last_name,
-        Student.age,
-        Student.gender,
+        Student,
         func.coalesce(
             func.count(
                 case(
@@ -104,6 +243,8 @@ async def get_students_by_class(
                 )
             ), 0
         ).label('absences')
+    ).options(
+        joinedload(Student.guardian)
     ).outerjoin(
         AttendanceRecord,
         and_(
@@ -114,17 +255,12 @@ async def get_students_by_class(
     ).filter(
         Student.current_class_id == class_id,
         Student.is_active == True
-    ).group_by(
-        Student.id,
-        Student.first_name,
-        Student.last_name,
-        Student.age,
-        Student.gender
-    )
+    ).group_by(Student.id)
     
     students_data = students_query.all()
     
-    student_ids = [str(student.id) for student in students_data]
+    # Get latest dropout predictions
+    student_ids = [str(student[0].id) for student in students_data]
     
     latest_predictions_subquery = db.query(
         DropoutPrediction.student_id,
@@ -141,38 +277,44 @@ async def get_students_by_class(
         )
     ).all()
     
-    predictions_dict = {
-        pred.student_id: pred for pred in latest_predictions
-    }
+    predictions_dict = {pred.student_id: pred for pred in latest_predictions}
     
+    # Prepare response
     students_response = []
-    for student in students_data:
-        student_id = student.id
-        prediction = predictions_dict.get(student_id)
-        
-        risk_score = prediction.risk_score if prediction else 0.0
-        risk_level = prediction.risk_level.value if prediction else "low"
+    for student, absences in students_data:
+        prediction = predictions_dict.get(student.id)
         
         students_response.append(StudentRiskResponse(
-            id=student_id,
+            id=student.id,
             name=f"{student.first_name} {student.last_name}",
             age=student.age or 0,
             gender=student.gender.value.title(),
-            absences=student.absences,
-            risk_score=round(risk_score, 2),
-            risk_level=risk_level.title()
+            absences=absences,
+            risk_score=round(prediction.risk_score, 2) if prediction else 0.0,
+            risk_level=prediction.risk_level.value.title() if prediction else "Low",
+            current_class_id=student.current_class_id,
+            guardian_contact=student.guardian.phone_number if student.guardian else None
         ))
     
+    # Sort by risk score (highest first) then by name
     students_response.sort(key=lambda x: (-x.risk_score, x.name))
+    
+    # Get primary teacher name
+    teacher_name = "N/A"
+    for tc in class_info.teacher_classes:
+        if tc.is_class_teacher:
+            teacher_name = f"{tc.teacher.first_name} {tc.teacher.last_name}"
+            break
     
     return StudentListResponse(
         students=students_response,
         total_count=len(students_response),
         class_name=class_info.name,
-        academic_year=class_info.academic_year
+        academic_year=class_info.academic_year,
+        teacher_name=teacher_name
     )
 
-@router.get("/class/{class_id}/summary")
+@router.get("/class/{class_id}/summary", response_model=ClassSummaryResponse)
 async def get_class_summary(
     class_id: UUID,
     db: Session = Depends(get_db),
@@ -181,7 +323,7 @@ async def get_class_summary(
     """
     Get summary statistics for a class including risk level distribution.
     """
-    
+    # Authorization check (same as get_students_by_class)
     if current_user.role not in [UserRole.TEACHER, UserRole.ADMIN, UserRole.HEADTEACHER]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -190,38 +332,32 @@ async def get_class_summary(
     
     class_info = db.query(Class).filter(Class.id == class_id).first()
     if not class_info:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Class not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Class not found")
     
     if current_user.role == UserRole.TEACHER:
         teacher = db.query(Teacher).filter(Teacher.user_id == current_user.id).first()
         if not teacher:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Teacher profile not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Teacher profile not found")
         
-        teacher_class_assignment = db.query(TeacherClass).filter(
-            and_(
-                TeacherClass.teacher_id == teacher.id,
-                TeacherClass.class_id == class_id,
-                TeacherClass.academic_year == class_info.academic_year
-            )
+        is_assigned = db.query(TeacherClass).filter(
+            TeacherClass.teacher_id == teacher.id,
+            TeacherClass.class_id == class_id,
+            TeacherClass.academic_year == class_info.academic_year
         ).first()
         
-        if not teacher_class_assignment:
+        if not is_assigned:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied. You are not assigned to this class."
             )
     
+    # Get total students
     total_students = db.query(Student).filter(
         Student.current_class_id == class_id,
         Student.is_active == True
     ).count()
     
+    # Get risk distribution
     student_ids = db.query(Student.id).filter(
         Student.current_class_id == class_id,
         Student.is_active == True
@@ -245,24 +381,39 @@ async def get_class_summary(
         )
     ).group_by(DropoutPrediction.risk_level).all()
     
-    students_with_predictions = sum(item.count for item in risk_distribution)
-    students_without_predictions = total_students - students_with_predictions
+    # Calculate attendance rate (last 30 days)
+    attendance_rate = None
+    thirty_days_ago = date.today() - timedelta(days=30)
+    attendance_stats = db.query(
+        func.count(case((AttendanceRecord.status == AttendanceStatus.PRESENT, 1))).label('present'),
+        func.count(AttendanceRecord.id).label('total')
+    ).join(
+        Student,
+        Student.id == AttendanceRecord.student_id
+    ).filter(
+        Student.current_class_id == class_id,
+        AttendanceRecord.date >= thirty_days_ago
+    ).first()
     
-    risk_counts = {
-        "low": students_without_predictions,
-        "medium": 0,
-        "high": 0,
-        "critical": 0
-    }
+    if attendance_stats and attendance_stats.total > 0:
+        attendance_rate = round((attendance_stats.present / attendance_stats.total) * 100, 2)
+    
+    # Prepare risk counts
+    risk_counts = {level.value: 0 for level in RiskLevel}
+    risk_counts["none"] = 0  # For students without predictions
     
     for risk_item in risk_distribution:
         risk_counts[risk_item.risk_level.value] = risk_item.count
     
-    return {
-        "class_name": class_info.name,
-        "academic_year": class_info.academic_year,
-        "total_students": total_students,
-        "capacity": class_info.capacity,
-        "risk_distribution": risk_counts,
-        "high_risk_students": risk_counts["high"] + risk_counts["critical"]
-    }
+    students_without_predictions = total_students - sum(risk_counts.values())
+    risk_counts["none"] = students_without_predictions
+    
+    return ClassSummaryResponse(
+        class_name=class_info.name,
+        academic_year=class_info.academic_year,
+        total_students=total_students,
+        capacity=class_info.capacity,
+        risk_distribution=risk_counts,
+        high_risk_students=risk_counts["high"] + risk_counts["critical"],
+        attendance_rate=attendance_rate
+    )
