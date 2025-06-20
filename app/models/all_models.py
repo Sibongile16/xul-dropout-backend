@@ -305,7 +305,7 @@ class AcademicPerformance(Base):
     assessment_name = Column(String(100), nullable=False)
     marks_obtained = Column(Float, nullable=False)
     total_marks = Column(Float, nullable=False)
-    percentage = Column(Float)  # Can be calculated
+    percentage = Column(Float)
     grade = Column(String(2))
     assessment_date = Column(Date, nullable=False)
     academic_year = Column(String(9), nullable=False)
