@@ -90,7 +90,6 @@ class PasswordChangeRequest(BaseModel):
 )
 async def create_teacher(
     teacher_data: TeacherCreate,
-    current_user: User = Depends(verify_admin),  # Only headteacher/admin can create
     db: Session = Depends(get_db)
 ):
     """
@@ -162,7 +161,6 @@ async def get_all_teachers(
     limit: int = Query(100, ge=1, le=1000),
     is_active: Optional[bool] = None,
     role: Optional[UserRole] = None,
-    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -191,7 +189,6 @@ async def get_all_teachers(
 @router.get("/{teacher_id}", response_model=TeacherResponse)
 async def get_teacher(
     teacher_id: UUID,
-    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -204,12 +201,6 @@ async def get_teacher(
     if not teacher:
         raise HTTPException(status_code=404, detail="Teacher not found")
     
-    # Authorization check
-    if current_user.role != UserRole.HEADTEACHER and current_user.id != teacher.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only access your own profile"
-        )
     
     response_data = {**teacher.__dict__, **teacher.user.__dict__}
     return response_data
@@ -218,7 +209,6 @@ async def get_teacher(
 async def update_teacher(
     teacher_id: UUID,
     teacher_data: TeacherUpdate,
-    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -230,13 +220,6 @@ async def update_teacher(
     
     if not teacher:
         raise HTTPException(status_code=404, detail="Teacher not found")
-    
-    # Authorization check
-    if current_user.role != UserRole.HEADTEACHER and current_user.id != teacher.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only update your own profile"
-        )
     
     # Update teacher profile
     if teacher_data.first_name is not None:
@@ -266,10 +249,10 @@ async def update_teacher(
             )
         teacher.user.email = teacher_data.email
     
-    if teacher_data.is_active is not None and current_user.role == UserRole.HEADTEACHER:
+    if teacher_data.is_active is not None:
         teacher.user.is_active = teacher_data.is_active
     
-    teacher.user.updated_at = datetime.utcnow()
+    teacher.user.updated_at = datetime.now()
     db.commit()
     db.refresh(teacher)
     
@@ -280,7 +263,6 @@ async def update_teacher(
 async def change_teacher_password(
     teacher_id: UUID,
     password_data: PasswordChangeRequest,
-    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -293,13 +275,7 @@ async def change_teacher_password(
     if not teacher:
         raise HTTPException(status_code=404, detail="Teacher not found")
     
-    # Authorization check
-    if current_user.role != UserRole.HEADTEACHER and current_user.id != teacher.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only change your own password"
-        )
-    
+
     if not verify_password(password_data.current_password, teacher.user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -307,25 +283,18 @@ async def change_teacher_password(
         )
     
     teacher.user.password_hash = get_password_hash(password_data.new_password)
-    teacher.user.updated_at = datetime.utcnow()
+    teacher.user.updated_at = datetime.now()
     db.commit()
     return None
 
 @router.delete("/{teacher_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def deactivate_teacher(
     teacher_id: UUID,
-    current_user: User = Depends(verify_admin),  # Only headteacher can deactivate
     db: Session = Depends(get_db)
 ):
     """
     Deactivate a teacher account
     """
-    if current_user.id == teacher_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You cannot deactivate your own account"
-        )
-    
     teacher = db.query(Teacher).options(
         joinedload(Teacher.user)
     ).filter(Teacher.user_id == teacher_id).first()
@@ -341,7 +310,6 @@ async def deactivate_teacher(
 @router.post("/{teacher_id}/reactivate", response_model=TeacherResponse)
 async def reactivate_teacher(
     teacher_id: UUID,
-    current_user: User = Depends(verify_admin),  # Only headteacher can reactivate
     db: Session = Depends(get_db)
 ):
     """
