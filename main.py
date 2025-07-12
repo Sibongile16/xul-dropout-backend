@@ -1,11 +1,23 @@
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
-from app.routes import auth, teacher, students, classes, users, ml_model, dashboard
+from fastapi.responses import RedirectResponse
+from app.routes import (auth, teacher, students, 
+                        classes, users, ml_model, dashboard, schedulers, academics,
+                        grades
+                        
+)
+                        
 from app.middleware import add_cors_middleware
+from contextlib import asynccontextmanager
 
-
-app = FastAPI(title="School Management System", description="A system for managing a school", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with schedulers.lifespan(app):
+        yield
+        
+app = FastAPI(title="School Management System", 
+              description="A system for managing a school", 
+              version="1.0.0",
+              lifespan=lifespan)
 add_cors_middleware(app)
 
 
@@ -17,6 +29,8 @@ async def root():
     """
     return RedirectResponse(url="/docs")
 
+app.include_router(grades.router)
+app.include_router(academics.router)
 app.include_router(dashboard.router)
 app.include_router(ml_model.router)
 app.include_router(auth.router)

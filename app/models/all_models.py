@@ -269,3 +269,18 @@ class DropoutPrediction(Base):
     created_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")))
     
     student = relationship("Student", back_populates="dropout_predictions")
+    
+
+class PredictionTaskHistory(Base):
+    __tablename__ = "prediction_task_history"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    started_at = Column(DateTime(timezone=True), nullable=False)
+    completed_at = Column(DateTime(timezone=True))
+    total_students = Column(Integer)  # Added this column
+    processed_count = Column(Integer)  # Added this column
+    success_count = Column(Integer)
+    failure_count = Column(Integer)
+    status = Column(String(20))  # 'running', 'completed', 'failed'
+    error_message = Column(Text)
+    duration_seconds = Column(Integer)

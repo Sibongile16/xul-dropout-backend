@@ -303,7 +303,7 @@ async def deactivate_teacher(
         raise HTTPException(status_code=404, detail="Teacher not found")
     
     teacher.user.is_active = False
-    teacher.user.updated_at = datetime.utcnow()
+    teacher.user.updated_at = datetime.now()
     db.commit()
     return None
 
@@ -323,7 +323,7 @@ async def reactivate_teacher(
         raise HTTPException(status_code=404, detail="Teacher not found")
     
     teacher.user.is_active = True
-    teacher.user.updated_at = datetime.utcnow()
+    teacher.user.updated_at = datetime.now()
     db.commit()
     db.refresh(teacher)
     

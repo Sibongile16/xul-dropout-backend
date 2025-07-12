@@ -2,6 +2,7 @@ from datetime import datetime
 import logging
 from uuid import UUID
 from fastapi import HTTPException
+from pytz import timezone
 from sqlalchemy import func, and_, or_, case, text, Integer
 from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any
@@ -141,7 +142,7 @@ async def save_prediction_to_db(prediction: PredictionResponse, db: Session):
             algorithm_version='xgboost_v2.0', 
             teacher_notified=False,
             intervention_recommended='; '.join(prediction.recommendations),
-            created_at=datetime.now()
+            created_at=datetime.now(timezone("Africa/Blantyre"))
         )
         
         db.add(new_prediction)
@@ -150,8 +151,6 @@ async def save_prediction_to_db(prediction: PredictionResponse, db: Session):
         
     except Exception as e:
         logger.error(f"Error saving prediction: {e}", exc_info=True)
-        db.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error saving prediction: {str(e)}"
-        )
+        db.rollback()  # Use async rollback if available
+        raise
+        
