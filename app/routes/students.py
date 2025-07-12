@@ -1,11 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
-import pandas as pd
-import io
 from datetime import datetime, date
 from uuid import UUID
 
@@ -45,7 +42,7 @@ class SubjectScoreResponse(BaseModel):
     grade: str
 
 class TermPerformanceResponse(BaseModel):
-    term_id: str
+    term_id: UUID
     term_type: TermType
     academic_year: str
     standard: int
@@ -58,7 +55,7 @@ class TermPerformanceResponse(BaseModel):
         from_attributes = True
 
 class StudentBase(BaseModel):
-    student_id: str
+    student_id: UUID
     first_name: str
     last_name: str
     date_of_birth: date
@@ -80,7 +77,7 @@ class StudentCreate(StudentBase):
     class_id: Optional[UUID] = None
 
 class StudentUpdate(BaseModel):
-    student_id: Optional[str] = None
+    student_id: Optional[UUID] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     date_of_birth: Optional[date] = None
@@ -180,7 +177,7 @@ def get_student_performance(db: Session, student_id: UUID):
         ).all()
 
         performance.append(TermPerformanceResponse(
-            term_id=term.term_id,
+            term_id=term.id,
             term_type=term.term_type,
             academic_year=term.academic_year,
             standard=term.standard,
@@ -207,7 +204,7 @@ async def create_student(
 ):
     # Check if student ID exists
     existing_student = db.query(Student).filter(
-        Student.student_id == student_data.student_id
+        Student.id == student_data.student_id
     ).first()
     
     if existing_student:
@@ -271,7 +268,7 @@ async def get_students(
     
     student_responses = []
     for student in students:
-        student_data = StudentWithDetailsResponse.from_orm(student)
+        student_data = StudentWithDetailsResponse.model_validate(student)
         if include_performance:
             student_data.performance_history = get_student_performance(db, student.id)
         student_responses.append(student_data)
@@ -295,7 +292,7 @@ async def get_student(
     if not student:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found")
     
-    response = StudentWithDetailsResponse.from_orm(student)
+    response = StudentWithDetailsResponse.model_validate(student)
     if include_performance:
         response.performance_history = get_student_performance(db, student_id)
     
@@ -305,13 +302,12 @@ async def get_student(
 async def update_student(
     student_id: UUID,
     student_data: StudentUpdate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: Session = Depends(get_db)
 ):
     db_student = get_student_or_404(db, student_id)
     
     # Validate student ID
-    if student_data.student_id and student_data.student_id != db_student.student_id:
+    if student_data.student_id and student_data.student_id != db_student.id:
         existing = db.query(Student).filter(
             Student.student_id == student_data.student_id,
             Student.id != student_id
@@ -351,13 +347,7 @@ async def update_student(
 async def delete_student(
     student_id: UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
 ):
-    if current_user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only administrators can delete students"
-        )
     
     db_student = get_student_or_404(db, student_id)
     db_student.status = StudentStatus.DROPPED_OUT

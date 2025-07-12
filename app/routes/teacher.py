@@ -176,15 +176,15 @@ async def get_teacher(
     db: Session = Depends(get_db)
 ):
     teacher = db.query(Teacher).options(
-        joinedload(Teacher.teacher_classes).joinedload(TeacherClass.class_)
+        joinedload(Teacher.classes).joinedload(TeacherClass.class_)
     ).filter(Teacher.id == teacher_id).first()
     
     if not teacher:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Teacher not found")
     
     if academic_year:
-        teacher.teacher_classes = [
-            tc for tc in teacher.teacher_classes 
+        teacher.classes = [
+            tc for tc in teacher.classes 
             if tc.academic_year == academic_year
         ]
     
@@ -380,7 +380,7 @@ async def get_class_summary(
         is_assigned = db.query(TeacherClass).filter(
             TeacherClass.teacher_id == teacher.id,
             TeacherClass.class_id == class_id,
-            TeacherClass.academic_year == class_info.academic_year
+            # TeacherClass.class_.academic_year == class_info.academic_year
         ).first()
         
         if not is_assigned:
