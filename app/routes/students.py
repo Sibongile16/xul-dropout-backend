@@ -55,7 +55,7 @@ class TermPerformanceResponse(BaseModel):
         from_attributes = True
 
 class StudentBase(BaseModel):
-    student_id: UUID
+    student_id: str
     first_name: str
     last_name: str
     date_of_birth: date
@@ -77,7 +77,7 @@ class StudentCreate(StudentBase):
     class_id: Optional[UUID] = None
 
 class StudentUpdate(BaseModel):
-    student_id: Optional[UUID] = None
+    student_id: Optional[str] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     date_of_birth: Optional[date] = None
