@@ -1,8 +1,9 @@
 from datetime import date
+from uuid import UUID
 from pydantic import BaseModel
 
 class StudentResponse(BaseModel):
-    id: int
+    id: UUID
     name: str
     email: str
     phone: str
@@ -18,13 +19,13 @@ class StudentUpdate(BaseModel):
     phone: str
 
 class StudentDelete(BaseModel):
-    id: int
+    id: UUID
     name: str
     email: str
     phone: str
 
 class StudentDropout(BaseModel):
-    id: int
+    id: UUID
     name: str
     email: str
     phone: str
@@ -32,7 +33,7 @@ class StudentDropout(BaseModel):
     reason: str
 
 class StudentEnrollment(BaseModel):
-    id: int
+    id: UUID
     name: str
     email: str
     phone: str
@@ -43,7 +44,7 @@ class StudentEnrollment(BaseModel):
     teacher_name: str
 
 class StudentAttendance(BaseModel):
-    id: int
+    id: UUID
     name: str
     email: str
     phone: str
@@ -51,14 +52,14 @@ class StudentAttendance(BaseModel):
     status: str
 
 class StudentProgress(BaseModel):
-    id: int
+    id: UUID
     name: str
     email: str
     phone: str
     progress: float
 
 class StudentReport(BaseModel):
-    id: int
+    id: UUID
     name: str
     email: str
     phone: str

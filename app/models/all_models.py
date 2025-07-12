@@ -101,6 +101,7 @@ class Teacher(Base):
     hire_date = Column(Date)
     qualification = Column(String(100))
     experience_years = Column(Integer)
+    is_active = Column(Boolean, default = True)
     created_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")))
     updated_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")), onupdate=datetime.now(timezone("Africa/Blantyre")))
     
