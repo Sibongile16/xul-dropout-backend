@@ -10,8 +10,8 @@ from pydantic import BaseModel
 from app.database import get_db
 from app.utils.auth import get_current_user
 from app.models.all_models import (
-    User, Teacher, Student, Class, AttendanceRecord, DropoutPrediction,
-    TeacherClass, AttendanceStatus, UserRole, RiskLevel, Gender
+    AcademicTerm, StudentStatus, Subject, SubjectScore, TermType, User, Teacher, Student, Class, DropoutPrediction,
+    TeacherClass, UserRole, RiskLevel, Gender
 )
 from pytz import timezone
 
@@ -70,6 +70,11 @@ class TeacherWithClassesResponse(TeacherResponse):
     class Config:
         from_attributes = True
 
+class SubjectScoreResponse(BaseModel):
+    subject_name: str
+    score: float
+    grade: str
+
 class StudentRiskResponse(BaseModel):
     id: UUID
     name: str
@@ -80,6 +85,7 @@ class StudentRiskResponse(BaseModel):
     risk_level: str
     current_class_id: Optional[UUID] = None
     guardian_contact: Optional[str] = None
+    term_scores: Optional[List[SubjectScoreResponse]] = None
 
     class Config:
         from_attributes = True
@@ -99,6 +105,7 @@ class ClassSummaryResponse(BaseModel):
     risk_distribution: Dict[str, int]
     high_risk_students: int
     attendance_rate: Optional[float] = None
+    average_scores: Optional[Dict[str, float]] = None
 
 # Helper Functions
 def get_teacher_or_404(db: Session, teacher_id: UUID):
@@ -202,10 +209,12 @@ async def get_teacher_classes(
     
     return query.all()
 
-# Class Management Endpoints
+
+# Updated Class Management Endpoints
 @router.get("/class/{class_id}/students", response_model=StudentListResponse)
 async def get_students_by_class(
     class_id: UUID,
+    include_scores: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -238,35 +247,30 @@ async def get_students_by_class(
                 detail="Access denied. You are not assigned to this class."
             )
     
-    academic_year_start, academic_year_end = get_academic_year_dates(class_info.academic_year)
+    # Get current term
+    current_term = db.query(AcademicTerm).filter(
+        AcademicTerm.student_id == Student.id,
+        AcademicTerm.academic_year == class_info.academic_year,
+        AcademicTerm.term_type == TermType.TERM1  # Adjust based on your term logic
+    ).subquery()
     
     students_query = db.query(
         Student,
-        func.coalesce(
-            func.count(
-                case(
-                    (AttendanceRecord.status == AttendanceStatus.ABSENT, 1),
-                    else_=None
-                )
-            ), 0
-        ).label('absences')
+        func.coalesce(current_term.c.absent_days, 0).label('absences')
     ).options(
         joinedload(Student.guardian)
     ).outerjoin(
-        AttendanceRecord,
-        and_(
-            AttendanceRecord.student_id == Student.id,
-            AttendanceRecord.date >= academic_year_start,
-            AttendanceRecord.date <= academic_year_end
-        )
+        current_term,
+        current_term.c.student_id == Student.id
     ).filter(
-        Student.current_class_id == class_id,
-        Student.is_active == True
-    ).group_by(Student.id)
+        Student.class_id == class_id,
+        Student.status == StudentStatus.ACTIVE
+    )
     
     students_data = students_query.all()
     student_ids = [str(student[0].id) for student in students_data]
     
+    # Get latest predictions
     latest_predictions_subquery = db.query(
         DropoutPrediction.student_id,
         func.max(DropoutPrediction.prediction_date).label('latest_date')
@@ -282,9 +286,47 @@ async def get_students_by_class(
     
     predictions_dict = {pred.student_id: pred for pred in latest_predictions}
     
+    # Get subject scores if requested
+    scores_dict = {}
+    if include_scores:
+        scores_data = db.query(
+            SubjectScore.academic_term_id,
+            SubjectScore.subject_id,
+            SubjectScore.score,
+            SubjectScore.grade,
+            Subject.name.label('subject_name')
+        ).join(
+            Subject,
+            SubjectScore.subject_id == Subject.id
+        ).filter(
+            SubjectScore.academic_term_id.in_(
+                db.query(AcademicTerm.id).filter(
+                    AcademicTerm.student_id.in_(student_ids),
+                    AcademicTerm.term_type == TermType.TERM1  # Current term
+                )
+            )
+        ).all()
+        
+        for score in scores_data:
+            if score.academic_term_id not in scores_dict:
+                scores_dict[score.academic_term_id] = []
+            scores_dict[score.academic_term_id].append(SubjectScoreResponse(
+                subject_name=score.subject_name,
+                score=score.score,
+                grade=score.grade
+            ))
+    
     students_response = []
     for student, absences in students_data:
         prediction = predictions_dict.get(student.id)
+        term_scores = None
+        if include_scores:
+            term_id = db.query(AcademicTerm.id).filter(
+                AcademicTerm.student_id == student.id,
+                AcademicTerm.term_type == TermType.TERM1  # Current term
+            ).scalar()
+            term_scores = scores_dict.get(term_id, [])
+        
         students_response.append(StudentRiskResponse(
             id=student.id,
             name=f"{student.first_name} {student.last_name}",
@@ -293,8 +335,9 @@ async def get_students_by_class(
             absences=absences,
             risk_score=round(prediction.risk_score, 2) if prediction else 0.0,
             risk_level=prediction.risk_level.value.title() if prediction else "Low",
-            current_class_id=student.current_class_id,
-            guardian_contact=student.guardian.phone_number if student.guardian else None
+            current_class_id=student.class_id,
+            guardian_contact=student.guardian.phone_number if student.guardian else None,
+            term_scores=term_scores
         ))
     
     students_response.sort(key=lambda x: (-x.risk_score, x.name))
@@ -347,15 +390,16 @@ async def get_class_summary(
             )
     
     total_students = db.query(Student).filter(
-        Student.current_class_id == class_id,
-        Student.is_active == True
+        Student.class_id == class_id,
+        Student.status == StudentStatus.ACTIVE
     ).count()
     
     student_ids = db.query(Student.id).filter(
-        Student.current_class_id == class_id,
-        Student.is_active == True
+        Student.class_id == class_id,
+        Student.status == StudentStatus.ACTIVE
     ).subquery()
     
+    # Get risk distribution
     latest_predictions_subquery = db.query(
         DropoutPrediction.student_id,
         func.max(DropoutPrediction.prediction_date).label('latest_date')
@@ -374,21 +418,42 @@ async def get_class_summary(
         )
     ).group_by(DropoutPrediction.risk_level).all()
     
-    attendance_rate = None
-    thirty_days_ago = date.today() - timedelta(days=30)
-    attendance_stats = db.query(
-        func.count(case((AttendanceRecord.status == AttendanceStatus.PRESENT, 1))).label('present'),
-        func.count(AttendanceRecord.id).label('total')
+    # Get attendance rate from AcademicTerm
+    current_term_attendance = db.query(
+        func.avg(AcademicTerm.present_days / (AcademicTerm.present_days + AcademicTerm.absent_days)).label('attendance_rate')
     ).join(
         Student,
-        Student.id == AttendanceRecord.student_id
+        Student.id == AcademicTerm.student_id
     ).filter(
-        Student.current_class_id == class_id,
-        AttendanceRecord.date >= thirty_days_ago
-    ).first()
+        Student.class_id == class_id,
+        AcademicTerm.term_type == TermType.TERM1,  # Current term
+        AcademicTerm.academic_year == class_info.academic_year
+    ).scalar()
     
-    if attendance_stats and attendance_stats.total > 0:
-        attendance_rate = round((attendance_stats.present / attendance_stats.total) * 100, 2)
+    attendance_rate = round(current_term_attendance * 100, 2) if current_term_attendance else None
+    
+    # Get average subject scores
+    average_scores = {}
+    subject_scores = db.query(
+        Subject.name,
+        func.avg(SubjectScore.score).label('avg_score')
+    ).join(
+        SubjectScore,
+        SubjectScore.subject_id == Subject.id
+    ).join(
+        AcademicTerm,
+        AcademicTerm.id == SubjectScore.academic_term_id
+    ).join(
+        Student,
+        Student.id == AcademicTerm.student_id
+    ).filter(
+        Student.class_id == class_id,
+        AcademicTerm.term_type == TermType.TERM1,  # Current term
+        AcademicTerm.academic_year == class_info.academic_year
+    ).group_by(Subject.name).all()
+    
+    for subject in subject_scores:
+        average_scores[subject.name] = round(subject.avg_score, 2)
     
     risk_counts = {level.value: 0 for level in RiskLevel}
     risk_counts["none"] = 0
@@ -406,5 +471,6 @@ async def get_class_summary(
         capacity=class_info.capacity,
         risk_distribution=risk_counts,
         high_risk_students=risk_counts["high"] + risk_counts["critical"],
-        attendance_rate=attendance_rate
+        attendance_rate=attendance_rate,
+        average_scores=average_scores
     )

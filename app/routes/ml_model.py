@@ -1,13 +1,15 @@
 from datetime import date, datetime
 import logging
+from typing import Any, Dict, List
+from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 import psutil
 from sqlalchemy import and_, case, func
 from sqlalchemy.orm import Session
 from app.crud.prediction import fetch_student_data, save_prediction_to_db
 from app.database import get_db
-from app.models.all_models import DropoutPrediction, Student
-from app.schemas.ml_model import BatchPredictionRequest, BatchPredictionResponse, HealthCheckResponse, PredictionRequest, PredictionResponse, RiskDistributionResponse, StudentPredictionHistoryResponse
+from app.models.all_models import AcademicTerm, BullyingIncident, Class, DropoutPrediction, Guardian, Student, Subject, SubjectScore
+from app.schemas.ml_model import BatchPredictionRequest, BatchPredictionResponse, HealthCheckResponse, PredictionRequest, PredictionResponse, RiskDistributionResponse, StudentPredictionHistoryResponse, StudentWithRisk
 from app.services.ml_model import generate_recommendations, get_contributing_factors
 from app.utils.ml_model import determine_risk_level, load_model_artifacts, preprocess_features
 from app.utils.system_utils import determine_system_status
@@ -38,6 +40,194 @@ async def health_check():
             "status": system_status
         }
     }
+
+@router.get("/student/{student_id}", response_model=Dict[str, Any])
+async def get_student_data_with_realtime_prediction(
+    student_id: UUID,
+    db: Session = Depends(get_db)
+):
+    """
+    Get comprehensive student data including:
+    - Basic info
+    - Academic performance
+    - Attendance
+    - Bullying incidents
+    - Real-time dropout prediction
+    - Guardian info
+    """
+    try:
+        # 1. Fetch student data from DB
+        student = db.query(Student).filter(Student.id == student_id).first()
+        if not student:
+            raise HTTPException(status_code=404, detail="Student not found")
+
+        # 2. Fetch related data for prediction
+        guardian = db.query(Guardian).filter(Guardian.id == student.guardian_id).first()
+        class_info = db.query(Class).filter(Class.id == student.class_id).first()
+        current_term = db.query(AcademicTerm).filter(
+            AcademicTerm.student_id == student_id
+        ).order_by(
+            AcademicTerm.academic_year.desc(),
+            AcademicTerm.term_type.desc()
+        ).first()
+
+        # 3. Prepare features for ML model
+        features = await fetch_student_data(student_id, db)
+        if not features:
+            raise HTTPException(status_code=400, detail="Insufficient data for prediction")
+
+        # 4. Make real-time prediction
+        scaled_features = preprocess_features(features)
+        probability = model.predict_proba(scaled_features)[0][1]
+        risk_level = determine_risk_level(probability)
+        contributing_factors = get_contributing_factors(features, probability)
+        recommendations = generate_recommendations(risk_level, contributing_factors)
+
+        # 5. Get additional data for response
+        subject_scores = []
+        if current_term:
+            subject_scores = db.query(
+                Subject.name,
+                SubjectScore.score,
+                SubjectScore.grade
+            ).join(
+                Subject,
+                SubjectScore.subject_id == Subject.id
+            ).filter(
+                SubjectScore.academic_term_id == current_term.id
+            ).all()
+
+        bullying_incidents = db.query(BullyingIncident).filter(
+            BullyingIncident.student_id == student_id
+        ).order_by(BullyingIncident.incident_date.desc()).limit(5).all()
+
+        # 6. Build response with real-time prediction
+        response = {
+            "student_info": {
+                "id": str(student.id),
+                "student_id": student.student_id,
+                "name": f"{student.first_name} {student.last_name}",
+                "age": student.age,
+                "gender": student.gender.value,
+                "status": student.status.value,
+                "class": class_info.name if class_info else None,
+            },
+            "academic_performance": {
+                "current_term": current_term.term_type.value if current_term else None,
+                "average_score": current_term.term_avg_score if current_term else None,
+                "subject_scores": [
+                    {"subject": s.name, "score": s.score, "grade": s.grade} 
+                    for s in subject_scores
+                ],
+            },
+            "risk_assessment": {
+                "real_time_prediction": {
+                    "risk_score": float(probability * 100),  # Convert to percentage
+                    "risk_level": risk_level.value,
+                    "contributing_factors": contributing_factors,
+                    "recommendations": recommendations,
+                    "prediction_time": datetime.now().isoformat()
+                },
+                "historical_predictions": [
+                    {
+                        "date": p.prediction_date.isoformat(),
+                        "risk_level": p.risk_level,
+                        "score": p.risk_score
+                    } 
+                    for p in db.query(DropoutPrediction)
+                    .filter(DropoutPrediction.student_id == student_id)
+                    .order_by(DropoutPrediction.prediction_date.desc())
+                    .limit(3)
+                    .all()
+                ]
+            }
+        }
+
+        return response
+
+    except Exception as e:
+        logger.error(f"Error in real-time prediction: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/class/{class_id}/students", response_model=List[StudentWithRisk])
+async def get_class_students_with_risk(
+    class_id: str,
+    realtime: bool = False,
+    db: Session = Depends(get_db)
+):
+    """
+    Get students by class with risk data
+    Returns:
+    - student_id, fullname, gender, age, status
+    - risk_score, risk_level (from latest prediction)
+    - realtime prediction (if requested)
+    - last_updated timestamp
+    - class_name
+    """
+    try:
+        # Verify class exists and get class name
+        class_obj = db.query(Class).filter(Class.id == class_id).first()
+        if not class_obj:
+            raise HTTPException(status_code=404, detail="Class not found")
+
+        # Get all students in the class
+        students = db.query(Student).filter(Student.class_id == class_id).all()
+        if not students:
+            return []
+
+        results = []
+        for student in students:
+            # Get latest prediction
+            latest_prediction = db.query(DropoutPrediction).filter(
+                DropoutPrediction.student_id == student.id
+            ).order_by(DropoutPrediction.prediction_date.desc()).first()
+
+            # Prepare base response
+            student_data = {
+                "student_id": student.id,
+                "fullname": f"{student.first_name} {student.last_name}",
+                "gender": student.gender.value,
+                "age": student.age,
+                "status": student.status.value,
+                "risk_score": latest_prediction.risk_score if latest_prediction else None,
+                "risk_level": latest_prediction.risk_level if latest_prediction else "unknown",
+                "last_prediction_date": latest_prediction.prediction_date.isoformat() if latest_prediction else None,
+                "last_updated": student.updated_at.isoformat(),
+                "class_name": class_obj.name,
+                "realtime_prediction": None
+            }
+
+            # Calculate realtime prediction if requested
+            if realtime:
+                try:
+                    features = await fetch_student_data(str(student.id), db)
+                    if features:
+                        scaled_features = preprocess_features(features)
+                        probability = model.predict_proba(scaled_features)[0][1]
+                        
+                        student_data["realtime_prediction"] = {
+                            "risk_score": float(probability * 100),
+                            "risk_level": determine_risk_level(probability).value,
+                            "timestamp": datetime.now().isoformat(),
+                            "confidence": max(probability, 1-probability),
+                            "factors": get_contributing_factors(features, probability)
+                        }
+                except Exception as e:
+                    logger.warning(f"Realtime prediction failed for {student.id}: {str(e)}")
+                    student_data["realtime_prediction"] = {
+                        "error": "Prediction unavailable"
+                    }
+
+            results.append(student_data)
+
+        return results
+
+    except Exception as e:
+        logger.error(f"Error in class students endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
 
 @router.post("/predict", response_model=PredictionResponse)
 async def predict_dropout_risk(
@@ -90,6 +280,8 @@ async def predict_dropout_risk(
     except Exception as e:
         logger.error(f"Error in prediction: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
 
 @router.post("/predict/batch", response_model=BatchPredictionResponse)
 async def predict_batch_dropout_risk(
