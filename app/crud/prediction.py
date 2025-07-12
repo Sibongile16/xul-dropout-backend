@@ -1,13 +1,13 @@
 from datetime import datetime
 import logging
+from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy import func, and_, or_, case, text, Integer
 from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any
 from app.models.all_models import (
-    Student, Guardian, Class, AttendanceRecord,
-    AcademicPerformance, BullyingIncident, StudentClassHistory,
-    DropoutPrediction
+    Student, Guardian, Class, AcademicTerm, Subject,
+    SubjectScore, BullyingRecord, DropoutPrediction
 )
 from app.schemas.ml_model import PredictionResponse
 
@@ -15,132 +15,131 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 async def fetch_student_data(student_id: str, db: Session) -> Optional[Dict[str, Any]]:
-    """Fetch student data from database for prediction using SQLAlchemy ORM"""
+    """Fetch student data from database and map to model-expected categories"""
     try:
-        # Calculate attendance rate subquery
-        attendance_subq = (
-            db.query(
-                AttendanceRecord.student_id,
-                func.count().filter(AttendanceRecord.status == 'present').label('present_count'),
-                func.count().label('total_count')
-            )
-            .filter(
-                AttendanceRecord.student_id == student_id,
-                AttendanceRecord.date >= func.current_date() - text("INTERVAL '30 days'")
-            )
-            .group_by(AttendanceRecord.student_id)
-            .subquery()
-        )
+        # Get the most recent academic term for the student
+        current_term = db.query(AcademicTerm).filter(
+            AcademicTerm.student_id == student_id
+        ).order_by(
+            AcademicTerm.academic_year.desc(),
+            AcademicTerm.term_type.desc()
+        ).first()
 
-        # Calculate average score subquery
-        avg_score_subq = (
-            db.query(
-                AcademicPerformance.student_id,
-                func.avg(AcademicPerformance.marks_obtained * AcademicPerformance.total_marks / 100).label('avg_score')
-            )
-            .filter(
-                AcademicPerformance.student_id == student_id,
-                AcademicPerformance.academic_year == (
-                    db.query(func.max(AcademicPerformance.academic_year))
-                        .filter(AcademicPerformance.student_id == student_id)
-                        .scalar_subquery()
-                )
-            )
-            .group_by(AcademicPerformance.student_id)
-            .subquery()
-        )
+        if not current_term:
+            logger.warning(f"No academic terms found for student {student_id}")
+            return None
 
-        # Count bullying incidents subquery
-        bullying_subq = (
-            db.query(
-                BullyingIncident.victim_student_id,
-                func.count().label('incident_count')
-            )
-            .filter(BullyingIncident.victim_student_id == student_id)
-            .group_by(BullyingIncident.victim_student_id)
-            .subquery()
-        )
+        # Get subject scores for the current term
+        subject_scores = db.query(
+            SubjectScore.score,
+            Subject.name
+        ).join(
+            Subject,
+            SubjectScore.subject_id == Subject.id
+        ).filter(
+            SubjectScore.academic_term_id == current_term.id
+        ).all()
 
-        # Count class repetitions subquery
-        repetition_subq = (
-            db.query(
-                StudentClassHistory.student_id,
-                func.count().label('repetition_count')
-            )
-            .filter(
-                StudentClassHistory.student_id == student_id,
-                StudentClassHistory.status == 'repeated'
-            )
-            .group_by(StudentClassHistory.student_id)
-            .subquery()
-        )
+        # Calculate average score from subject scores
+        avg_score = sum(score.score for score in subject_scores) / len(subject_scores) if subject_scores else 300
 
-        # Main query
+        # Get bullying records for the current term
+        bullying_record = db.query(BullyingRecord).filter(
+            BullyingRecord.academic_term_id == current_term.id
+        ).first()
+
+        # Get student and guardian information
         student = db.query(
-            Student.id.label('student_id'),
-            Student.age,
-            Student.gender,
-            Student.distance_to_school_km.label('distance_to_school'),
-            Student.special_needs,
-            Guardian.monthly_income_range.label('household_income'),
-            Guardian.relationship_to_student.label('orphan_status'),
-            Class.name.label('current_class'),
-            func.coalesce(
-                attendance_subq.c.present_count / 
-                func.nullif(attendance_subq.c.total_count, 0),
-                0.8
-            ).label('school_attendance_rate'),
-            func.coalesce(avg_score_subq.c.avg_score, 300).label('term_avg_score'),
-            func.coalesce(bullying_subq.c.incident_count, 0).label('bullying_incidents_total'),
-            func.coalesce(repetition_subq.c.repetition_count, 0).label('class_repetitions'),
-            func.coalesce(
-                func.cast(
-                    func.regexp_replace(Class.name, '[^0-9]', '', 'g'),
-                    Integer
-                ),
-                5
-            ).label('standard')
-        )\
-        .join(Guardian, Student.guardian_id == Guardian.id)\
-        .join(Class, Student.current_class_id == Class.id)\
-        .outerjoin(attendance_subq, Student.id == attendance_subq.c.student_id)\
-        .outerjoin(avg_score_subq, Student.id == avg_score_subq.c.student_id)\
-        .outerjoin(bullying_subq, Student.id == bullying_subq.c.victim_student_id)\
-        .outerjoin(repetition_subq, Student.id == repetition_subq.c.student_id)\
-        .filter(Student.id == student_id)\
-        .first()
+            Student,
+            Guardian
+        ).join(
+            Guardian,
+            Student.guardian_id == Guardian.id
+        ).filter(
+            Student.id == student_id
+        ).first()
 
-        if student:
-            return {
-                'student_id': str(student.student_id),
-                'age': student.age,
-                'gender': student.gender,
-                'distance_to_school': student.distance_to_school or 5.0,
-                'special_learning': bool(student.special_needs),
-                'household_income': student.household_income or 'medium',
-                'orphan_status': 'yes' if student.orphan_status in ['guardian', 'relative'] else 'no',
-                'school_attendance_rate': float(student.school_attendance_rate),
-                'term_avg_score': float(student.term_avg_score),
-                'bullying_incidents_total': int(student.bullying_incidents_total),
-                'class_repetitions': int(student.class_repetitions),
-                'standard': int(student.standard)
-            }
-        return None
+        if not student:
+            logger.error(f"Student {student_id} not found")
+            return None
+
+        student_obj, guardian = student
+
+        # ===== VALUE MAPPING =====
+        # 1. Map household_income to ['low', 'medium', 'high']
+        income_mapping = {
+            'low': 'low',
+            'medium': 'medium',
+            'high': 'high',
+            'very_low': 'low',
+            'very_high': 'high'
+        }
+        household_income = income_mapping.get(
+            (student_obj.household_income.value if student_obj.household_income else 'medium').lower(),
+            'medium'  # default value
+        )
+
+        # 2. Map orphan_status to ['none', 'single', 'double']
+        orphan_status = 'none'
+        if guardian.relationship_to_student.value != 'parent':
+            # Simplified logic - adjust based on your actual orphan status determination
+            orphan_status = 'single'  
+            # For actual implementation, you might need:
+            # if both_parents_deceased: orphan_status = 'double'
+            # else: orphan_status = 'single'
+
+        # 3. Map gender to ['Male', 'Female']
+        gender = student_obj.gender.value.capitalize()
+        if gender not in ['Male', 'Female']:
+            gender = 'Male'  # default value
+
+        # Calculate age-grade mismatch
+        expected_age = 6 + current_term.standard + (student_obj.class_repetitions or 0)
+        age_grade_mismatch = student_obj.age > expected_age + 2 if student_obj.age else False
+
+        return {
+            'student_id': str(student_obj.id),
+            'age': student_obj.age,
+            'gender': gender,
+            'distance_to_school': student_obj.distance_to_school or 5.0,
+            'special_learning': student_obj.special_learning or False,
+            'household_income': household_income,
+            'orphan_status': orphan_status,
+            'school_attendance_rate': current_term.present_days / (current_term.present_days + current_term.absent_days) 
+                                    if (current_term.present_days + current_term.absent_days) > 0 else 0.8,
+            'term_avg_score': avg_score,
+            'bullying_incidents_total': bullying_record.incidents_reported if bullying_record else 0,
+            'class_repetitions': student_obj.class_repetitions or 0,
+            'standard': current_term.standard,
+            'textbook_availability': student_obj.textbook_availability or False,
+            'age_grade_mismatch': age_grade_mismatch
+        }
         
     except Exception as e:
-        logger.error(f"Error fetching student data: {e}")
-        return None
+        logger.error(f"Error fetching student data: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching student data: {str(e)}"
+        )
+
 
 async def save_prediction_to_db(prediction: PredictionResponse, db: Session):
     """Save prediction to database using SQLAlchemy ORM"""
     try:
+        # Check if student exists
+        student = db.query(Student).filter(Student.id == prediction.student_id).first()
+        if not student:
+            logger.error(f"Student {prediction.student_id} not found")
+            raise ValueError(f"Student {prediction.student_id} not found")
+
         new_prediction = DropoutPrediction(
             student_id=prediction.student_id,
             risk_score=prediction.dropout_risk_probability * 100,
             risk_level=prediction.risk_level.value,
             contributing_factors=prediction.contributing_factors,
             prediction_date=prediction.prediction_date,
-            algorithm_version='xgboost_v1.0',
+            algorithm_version='xgboost_v2.0', 
+            teacher_notified=False,
             intervention_recommended='; '.join(prediction.recommendations),
             created_at=datetime.now()
         )
@@ -150,6 +149,9 @@ async def save_prediction_to_db(prediction: PredictionResponse, db: Session):
         logger.info(f"Prediction saved for student {prediction.student_id}")
         
     except Exception as e:
-        logger.error(f"Error saving prediction: {e}")
+        logger.error(f"Error saving prediction: {e}", exc_info=True)
         db.rollback()
-        raise
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error saving prediction: {str(e)}"
+        )

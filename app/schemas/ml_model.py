@@ -1,7 +1,7 @@
 # Global variables for model artifacts
 from datetime import date, datetime
 from enum import Enum
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -82,3 +82,25 @@ class HealthCheckResponse(BaseModel):
     model_loaded: bool
     timestamp: datetime
     system: SystemHealth
+    
+    
+class RealtimePrediction(BaseModel):
+    risk_score: float = Field(..., ge=0, le=100)
+    risk_level: str = Field(..., description="low/medium/high/critical")
+    timestamp: datetime
+    confidence: Optional[float] = Field(None, ge=0, le=1)
+    factors: Optional[List[str]] = None
+    error: Optional[str] = Field(None, description="Error message if prediction failed")
+
+class StudentWithRisk(BaseModel):
+    student_id: UUID
+    fullname: str
+    gender: str
+    age: int
+    status: str
+    risk_score: Optional[float] = Field(None, ge=0, le=100)
+    risk_level: Optional[str]
+    last_prediction_date: Optional[datetime]
+    last_updated: datetime
+    class_name: str
+    realtime_prediction: Optional[RealtimePrediction] = None

@@ -9,13 +9,12 @@ import io
 from datetime import datetime, date
 from uuid import UUID
 
-
 from app.database import get_db
 from app.utils.auth import get_current_user
 from app.models.all_models import (
-    AttendanceStatus, User, Student, Guardian, Class, Gender, RelationshipType, 
-    TransportMethod, IncomeRange, EducationLevel, StudentStatus,
-    StudentClassHistory, AttendanceRecord, DropoutPrediction, UserRole
+    Subject, User, Student, Guardian, Class, Gender, RelationshipType, 
+    TransportMethod, IncomeLevel, StudentStatus, AcademicTerm,
+    SubjectScore, DropoutPrediction, UserRole, TermType
 )
 from pytz import timezone
 
@@ -30,8 +29,6 @@ class GuardianBase(BaseModel):
     email: Optional[str] = None
     address: Optional[str] = None
     occupation: Optional[str] = None
-    monthly_income_range: Optional[IncomeRange] = None
-    education_level: Optional[EducationLevel] = None
 
     class Config:
         from_attributes = True
@@ -42,47 +39,69 @@ class GuardianCreate(GuardianBase):
 class GuardianResponse(GuardianBase):
     id: UUID
 
+class SubjectScoreResponse(BaseModel):
+    subject_name: str
+    score: float
+    grade: str
+
+class TermPerformanceResponse(BaseModel):
+    term_id: str
+    term_type: TermType
+    academic_year: str
+    standard: int
+    term_avg_score: float
+    present_days: int
+    absent_days: int
+    subject_scores: List[SubjectScoreResponse]
+
+    class Config:
+        from_attributes = True
+
 class StudentBase(BaseModel):
-    student_number: str
+    student_id: str
     first_name: str
     last_name: str
     date_of_birth: date
     gender: Gender
     home_address: Optional[str] = None
-    distance_to_school_km: Optional[float] = None
+    distance_to_school: Optional[float] = None
     transport_method: Optional[TransportMethod] = None
     enrollment_date: date
-    special_needs: Optional[str] = None
-    medical_conditions: Optional[str] = None
+    special_learning: Optional[bool] = None
+    textbook_availability: Optional[bool] = None
+    class_repetitions: Optional[int] = None
+    household_income: Optional[IncomeLevel] = None
 
     class Config:
         from_attributes = True
 
 class StudentCreate(StudentBase):
     guardian_id: UUID
-    current_class_id: Optional[UUID] = None
+    class_id: Optional[UUID] = None
 
 class StudentUpdate(BaseModel):
-    student_number: Optional[str] = None
+    student_id: Optional[str] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     date_of_birth: Optional[date] = None
     gender: Optional[Gender] = None
     home_address: Optional[str] = None
-    distance_to_school_km: Optional[float] = None
+    distance_to_school: Optional[float] = None
     transport_method: Optional[TransportMethod] = None
     enrollment_date: Optional[date] = None
-    special_needs: Optional[str] = None
-    medical_conditions: Optional[str] = None
-    current_class_id: Optional[UUID] = None
+    special_learning: Optional[bool] = None
+    textbook_availability: Optional[bool] = None
+    class_repetitions: Optional[int] = None
+    household_income: Optional[IncomeLevel] = None
+    class_id: Optional[UUID] = None
     guardian_id: Optional[UUID] = None
-    is_active: Optional[bool] = None
+    status: Optional[StudentStatus] = None
 
 class StudentResponse(StudentBase):
     id: UUID
     age: int
-    is_active: bool
-    current_class_id: Optional[UUID] = None
+    status: StudentStatus
+    class_id: Optional[UUID] = None
     guardian_id: UUID
 
 class StudentWithGuardianResponse(StudentResponse):
@@ -101,20 +120,7 @@ class StudentWithClassResponse(StudentResponse):
     current_class: Optional[ClassResponse] = None
 
 class StudentWithDetailsResponse(StudentWithGuardianResponse, StudentWithClassResponse):
-    pass
-
-class StudentClassHistoryResponse(BaseModel):
-    id: UUID
-    class_id: UUID
-    academic_year: str
-    enrollment_date: date
-    completion_date: Optional[date] = None
-    status: StudentStatus
-    reason_for_status_change: Optional[str] = None
-    class_info: ClassResponse
-
-    class Config:
-        from_attributes = True
+    performance_history: Optional[List[TermPerformanceResponse]] = None
 
 class StudentListResponse(BaseModel):
     students: List[StudentWithDetailsResponse]
@@ -127,6 +133,7 @@ class StudentRiskResponse(BaseModel):
     risk_level: str
     absences: int
     current_class: Optional[str] = None
+    last_term_avg: Optional[float] = None
 
 class UploadResponse(BaseModel):
     message: str
@@ -134,12 +141,6 @@ class UploadResponse(BaseModel):
     records_updated: int = 0
     errors: Optional[List[str]] = None
     warnings: Optional[List[str]] = None
-
-class ValidationError(BaseModel):
-    row: int
-    field: str
-    value: str
-    error: str
 
 # Helper Functions
 def get_student_or_404(db: Session, student_id: UUID):
@@ -158,6 +159,45 @@ def calculate_age(birth_date: date) -> int:
     today = date.today()
     return today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
 
+def get_student_performance(db: Session, student_id: UUID):
+    terms = db.query(AcademicTerm).filter(
+        AcademicTerm.student_id == student_id
+    ).order_by(
+        AcademicTerm.academic_year,
+        AcademicTerm.term_type
+    ).all()
+
+    performance = []
+    for term in terms:
+        scores = db.query(
+            SubjectScore,
+            Subject.name.label('subject_name')
+        ).join(
+            Subject,
+            SubjectScore.subject_id == Subject.id
+        ).filter(
+            SubjectScore.academic_term_id == term.id
+        ).all()
+
+        performance.append(TermPerformanceResponse(
+            term_id=term.term_id,
+            term_type=term.term_type,
+            academic_year=term.academic_year,
+            standard=term.standard,
+            term_avg_score=term.term_avg_score,
+            present_days=term.present_days,
+            absent_days=term.absent_days,
+            subject_scores=[
+                SubjectScoreResponse(
+                    subject_name=score.subject_name,
+                    score=score.score,
+                    grade=score.grade
+                ) for score in scores
+            ]
+        ))
+
+    return performance
+
 # Student CRUD Endpoints
 @router.post("", response_model=StudentResponse, status_code=status.HTTP_201_CREATED)
 async def create_student(
@@ -165,23 +205,23 @@ async def create_student(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Check if student number exists
+    # Check if student ID exists
     existing_student = db.query(Student).filter(
-        Student.student_number == student_data.student_number
+        Student.student_id == student_data.student_id
     ).first()
     
     if existing_student:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Student with this number already exists"
+            detail="Student with this ID already exists"
         )
     
     # Validate guardian exists
     get_guardian_or_404(db, student_data.guardian_id)
     
     # Validate class exists if provided
-    if student_data.current_class_id:
-        class_ = db.query(Class).filter(Class.id == student_data.current_class_id).first()
+    if student_data.class_id:
+        class_ = db.query(Class).filter(Class.id == student_data.class_id).first()
         if not class_:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -193,7 +233,8 @@ async def create_student(
     
     db_student = Student(
         **student_data.model_dump(),
-        age=age
+        age=age,
+        status=StudentStatus.ACTIVE
     )
     
     db.add(db_student)
@@ -205,21 +246,22 @@ async def create_student(
 async def get_students(
     skip: int = 0,
     limit: int = 100,
-    is_active: Optional[bool] = None,
+    status: Optional[StudentStatus] = None,
     class_id: Optional[UUID] = None,
     gender: Optional[Gender] = None,
+    include_performance: bool = False,
     db: Session = Depends(get_db)
 ):
     query = db.query(Student).options(
         joinedload(Student.guardian),
-        joinedload(Student.current_class)
+        joinedload(Student.class_)
     )
     
-    if is_active is not None:
-        query = query.filter(Student.is_active == is_active)
+    if status is not None:
+        query = query.filter(Student.status == status)
     
     if class_id:
-        query = query.filter(Student.current_class_id == class_id)
+        query = query.filter(Student.class_id == class_id)
     
     if gender:
         query = query.filter(Student.gender == gender)
@@ -227,22 +269,37 @@ async def get_students(
     students = query.offset(skip).limit(limit).all()
     total_count = query.count()
     
-    return StudentListResponse(students=students, total_count=total_count)
+    student_responses = []
+    for student in students:
+        student_data = StudentWithDetailsResponse.from_orm(student)
+        if include_performance:
+            student_data.performance_history = get_student_performance(db, student.id)
+        student_responses.append(student_data)
+    
+    return StudentListResponse(
+        students=student_responses,
+        total_count=total_count
+    )
 
 @router.get("/{student_id}", response_model=StudentWithDetailsResponse)
 async def get_student(
     student_id: UUID,
+    include_performance: bool = False,
     db: Session = Depends(get_db)
 ):
     student = db.query(Student).options(
         joinedload(Student.guardian),
-        joinedload(Student.current_class)
+        joinedload(Student.class_)
     ).filter(Student.id == student_id).first()
     
     if not student:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found")
     
-    return student
+    response = StudentWithDetailsResponse.from_orm(student)
+    if include_performance:
+        response.performance_history = get_student_performance(db, student_id)
+    
+    return response
 
 @router.put("/{student_id}", response_model=StudentResponse)
 async def update_student(
@@ -253,16 +310,16 @@ async def update_student(
 ):
     db_student = get_student_or_404(db, student_id)
     
-    # Validate student number
-    if student_data.student_number and student_data.student_number != db_student.student_number:
+    # Validate student ID
+    if student_data.student_id and student_data.student_id != db_student.student_id:
         existing = db.query(Student).filter(
-            Student.student_number == student_data.student_number,
+            Student.student_id == student_data.student_id,
             Student.id != student_id
         ).first()
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Student number already exists"
+                detail="Student ID already exists"
             )
     
     # Validate guardian exists
@@ -270,8 +327,8 @@ async def update_student(
         get_guardian_or_404(db, student_data.guardian_id)
     
     # Validate class exists
-    if student_data.current_class_id:
-        class_ = db.query(Class).filter(Class.id == student_data.current_class_id).first()
+    if student_data.class_id:
+        class_ = db.query(Class).filter(Class.id == student_data.class_id).first()
         if not class_:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -303,61 +360,10 @@ async def delete_student(
         )
     
     db_student = get_student_or_404(db, student_id)
-    db_student.is_active = False
+    db_student.status = StudentStatus.DROPPED_OUT
     db.commit()
     db.refresh(db_student)
     return db_student
-
-# Student History Endpoints
-@router.get("/{student_id}/history", response_model=List[StudentClassHistoryResponse])
-async def get_student_history(
-    student_id: UUID,
-    db: Session = Depends(get_db)
-):
-    get_student_or_404(db, student_id)
-    
-    history = db.query(StudentClassHistory).options(
-        joinedload(StudentClassHistory.class_)
-    ).filter(
-        StudentClassHistory.student_id == student_id
-    ).order_by(StudentClassHistory.academic_year).all()
-    
-    return history
-
-# Guardian Endpoints
-@router.post("/guardians", response_model=GuardianResponse, status_code=status.HTTP_201_CREATED)
-async def create_guardian(
-    guardian_data: GuardianCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    db_guardian = Guardian(**guardian_data.model_dump())
-    db.add(db_guardian)
-    db.commit()
-    db.refresh(db_guardian)
-    return db_guardian
-
-@router.get("/guardians/{guardian_id}", response_model=GuardianResponse)
-async def get_guardian(
-    guardian_id: UUID,
-    db: Session = Depends(get_db)
-):
-    return get_guardian_or_404(db, guardian_id)
-
-@router.get("/guardians/{guardian_id}/students", response_model=List[StudentResponse])
-async def get_guardian_students(
-    guardian_id: UUID,
-    is_active: Optional[bool] = None,
-    db: Session = Depends(get_db)
-):
-    get_guardian_or_404(db, guardian_id)
-    
-    query = db.query(Student).filter(Student.guardian_id == guardian_id)
-    
-    if is_active is not None:
-        query = query.filter(Student.is_active == is_active)
-    
-    return query.all()
 
 # Risk Assessment Endpoints
 @router.get("/{student_id}/risk", response_model=StudentRiskResponse)
@@ -372,235 +378,24 @@ async def get_student_risk(
         DropoutPrediction.student_id == student_id
     ).order_by(DropoutPrediction.prediction_date.desc()).first()
     
-    # Get absences in current academic year
-    academic_year = student.current_class.academic_year if student.current_class else str(datetime.now().year)
-    year_start, year_end = get_academic_year_dates(academic_year)
-    
-    absences = db.query(func.count(AttendanceRecord.id)).filter(
-        AttendanceRecord.student_id == student_id,
-        AttendanceRecord.status == AttendanceStatus.ABSENT,
-        AttendanceRecord.date >= year_start,
-        AttendanceRecord.date <= year_end
-    ).scalar() or 0
+    # Get latest term performance
+    latest_term = db.query(AcademicTerm).filter(
+        AcademicTerm.student_id == student_id
+    ).order_by(
+        AcademicTerm.academic_year.desc(),
+        AcademicTerm.term_type.desc()
+    ).first()
     
     return StudentRiskResponse(
         id=student.id,
         name=f"{student.first_name} {student.last_name}",
         risk_score=prediction.risk_score if prediction else 0.0,
         risk_level=prediction.risk_level.value if prediction else "low",
-        absences=absences,
-        current_class=student.current_class.name if student.current_class else None
+        absences=latest_term.absent_days if latest_term else 0,
+        current_class=student.class_.name if student.class_ else None,
+        last_term_avg=latest_term.term_avg_score if latest_term else None
     )
 
-# CSV Upload Endpoints (keep existing implementation)
-CSV_FIELDS = [
-    'first_name', 'last_name', 'date_of_birth', 'gender', 'student_number',
-    'home_address', 'distance_to_school_km', 'transport_method',
-    'special_needs', 'medical_conditions', 'enrollment_date',
-    'guardian_first_name', 'guardian_last_name', 'relationship_to_student',
-    'guardian_phone', 'guardian_email', 'guardian_address',
-    'guardian_occupation', 'guardian_income_range', 'guardian_education_level'
-]
-
-@router.post("/upload", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
-async def upload_student_csv(
-    file: UploadFile = File(...),
-    class_id: Optional[str] = Form(None),
-    term: Optional[str] = Form(None),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    # Authorization check
-    if current_user.role not in [UserRole.TEACHER, UserRole.ADMIN, UserRole.HEADTEACHER]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only teachers and administrators can upload student data"
-        )
-    
-    # Validate file type
-    if not file.filename.lower().endswith('.csv'):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only CSV files are accepted"
-        )
-    
-    # Validate class exists if provided
-    if class_id:
-        class_ = db.query(Class).filter(Class.id == class_id).first()
-        if not class_:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Class not found"
-            )
-    
-    try:
-        # Read CSV
-        contents = await file.read()
-        df = pd.read_csv(io.StringIO(contents.decode('utf-8')))
-        
-        if df.empty:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="CSV file is empty"
-            )
-        
-        # Validate headers
-        missing_fields = [field for field in CSV_FIELDS if field not in df.columns]
-        if missing_fields:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Missing required fields: {', '.join(missing_fields)}"
-            )
-        
-        # Process rows
-        records_added = 0
-        records_updated = 0
-        errors = []
-        warnings = []
-        
-        for index, row in df.iterrows():
-            try:
-                # Process student and guardian data
-                student_data = {
-                    'student_number': str(row['student_number']).strip(),
-                    'first_name': str(row['first_name']).strip(),
-                    'last_name': str(row['last_name']).strip(),
-                    'date_of_birth': pd.to_datetime(row['date_of_birth']).date(),
-                    'gender': Gender[row['gender'].lower()],
-                    'enrollment_date': pd.to_datetime(row['enrollment_date']).date() if pd.notna(row['enrollment_date']) else date.today(),
-                    'home_address': str(row['home_address']) if pd.notna(row['home_address']) else None,
-                    'distance_to_school_km': float(row['distance_to_school_km']) if pd.notna(row['distance_to_school_km']) else None,
-                    'transport_method': TransportMethod[row['transport_method'].lower()] if pd.notna(row['transport_method']) else None,
-                    'special_needs': str(row['special_needs']) if pd.notna(row['special_needs']) else None,
-                    'medical_conditions': str(row['medical_conditions']) if pd.notna(row['medical_conditions']) else None,
-                    'current_class_id': class_id
-                }
-                
-                guardian_data = {
-                    'first_name': str(row['guardian_first_name']).strip(),
-                    'last_name': str(row['guardian_last_name']).strip(),
-                    'relationship_to_student': RelationshipType[row['relationship_to_student'].lower()],
-                    'phone_number': str(row['guardian_phone']) if pd.notna(row['guardian_phone']) else None,
-                    'email': str(row['guardian_email']) if pd.notna(row['guardian_email']) else None,
-                    'address': str(row['guardian_address']) if pd.notna(row['guardian_address']) else None,
-                    'occupation': str(row['guardian_occupation']) if pd.notna(row['guardian_occupation']) else None,
-                    'monthly_income_range': IncomeRange[row['guardian_income_range'].lower()] if pd.notna(row['guardian_income_range']) else None,
-                    'education_level': EducationLevel[row['guardian_education_level'].lower()] if pd.notna(row['guardian_education_level']) else None
-                }
-                
-                # Find or create guardian
-                guardian = db.query(Guardian).filter(
-                    Guardian.first_name.ilike(guardian_data['first_name']),
-                    Guardian.last_name.ilike(guardian_data['last_name']),
-                    Guardian.relationship_to_student == guardian_data['relationship_to_student']
-                ).first()
-                
-                if guardian:
-                    # Update existing guardian
-                    for key, value in guardian_data.items():
-                        if value is not None:
-                            setattr(guardian, key, value)
-                    guardian_id = guardian.id
-                else:
-                    # Create new guardian
-                    guardian = Guardian(**guardian_data)
-                    db.add(guardian)
-                    db.flush()
-                    guardian_id = guardian.id
-                
-                # Find or create student
-                student = db.query(Student).filter(
-                    Student.student_number == student_data['student_number']
-                ).first()
-                
-                if student:
-                    # Update existing student
-                    student_data['guardian_id'] = guardian_id
-                    for key, value in student_data.items():
-                        if value is not None:
-                            setattr(student, key, value)
-                    records_updated += 1
-                    warnings.append(f"Updated student {student_data['student_number']}")
-                else:
-                    # Create new student
-                    student_data['guardian_id'] = guardian_id
-                    student_data['age'] = calculate_age(student_data['date_of_birth'])
-                    student = Student(**student_data)
-                    db.add(student)
-                    records_added += 1
-                
-            except Exception as e:
-                errors.append(f"Row {index + 2}: {str(e)}")
-                continue
-        
-        # Commit changes
-        if records_added > 0 or records_updated > 0:
-            try:
-                db.commit()
-            except IntegrityError as e:
-                db.rollback()
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Database error: {str(e)}"
-                )
-        else:
-            db.rollback()
-        
-        return UploadResponse(
-            message="Upload completed",
-            records_added=records_added,
-            records_updated=records_updated,
-            errors=errors if errors else None,
-            warnings=warnings if warnings else None
-        )
-    
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error processing file: {str(e)}"
-        )
-
-@router.get("/upload/template")
-async def get_csv_template():
-    # Create sample data
-    sample_data = {
-        'first_name': ['John', 'Jane'],
-        'last_name': ['Doe', 'Smith'],
-        'date_of_birth': ['2010-05-15', '2011-03-22'],
-        'gender': ['male', 'female'],
-        'student_number': ['STU001', 'STU002'],
-        'home_address': ['123 Main St', '456 Oak Ave'],
-        'distance_to_school_km': [2.5, 1.8],
-        'transport_method': ['walking', 'bicycle'],
-        'special_needs': ['', 'Hearing impaired'],
-        'medical_conditions': ['', 'Asthma'],
-        'enrollment_date': ['2023-01-10', '2023-01-10'],
-        'guardian_first_name': ['Mary', 'James'],
-        'guardian_last_name': ['Doe', 'Smith'],
-        'relationship_to_student': ['parent', 'parent'],
-        'guardian_phone': ['+265991234567', '+265998765432'],
-        'guardian_email': ['mary@example.com', 'james@example.com'],
-        'guardian_address': ['123 Main St', '456 Oak Ave'],
-        'guardian_occupation': ['Teacher', 'Engineer'],
-        'guardian_income_range': ['50k_100k', '100k_200k'],
-        'guardian_education_level': ['secondary', 'tertiary']
-    }
-    
-    # Create DataFrame
-    df = pd.DataFrame(sample_data)
-    
-    # Convert to CSV
-    csv_buffer = io.StringIO()
-    df.to_csv(csv_buffer, index=False)
-    
-    from fastapi.responses import StreamingResponse
-    
-    return StreamingResponse(
-        io.BytesIO(csv_buffer.getvalue().encode('utf-8')),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=student_upload_template.csv"}
-    )
 
 def get_academic_year_dates(academic_year: str):
     try:
