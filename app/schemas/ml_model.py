@@ -104,3 +104,64 @@ class StudentWithRisk(BaseModel):
     last_updated: datetime
     class_name: str
     realtime_prediction: Optional[RealtimePrediction] = None
+    
+    
+
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any
+from uuid import UUID
+from datetime import datetime
+from enum import Enum
+
+
+class RiskLevelEnum(str, Enum):
+    low = "Low"
+    medium = "Medium"
+    high = "High"
+
+
+class SubjectScoreOut(BaseModel):
+    subject: str
+    score: float
+    grade: str
+
+
+class RealTimePrediction(BaseModel):
+    risk_score: float = Field(..., description="Predicted dropout risk percentage")
+    risk_level: RiskLevel
+    contributing_factors: List[str]
+    recommendations: List[str]
+    prediction_time: datetime
+
+
+class HistoricalPrediction(BaseModel):
+    date: datetime
+    risk_level: str
+    score: float
+
+
+class AcademicPerformance(BaseModel):
+    current_term: Optional[str]
+    average_score: Optional[float]
+    subject_scores: List[SubjectScoreOut]
+
+
+class StudentInfo(BaseModel):
+    id: str
+    student_id: str
+    name: str
+    age: int
+    gender: str
+    status: str
+    class_: Optional[str] = Field(None, alias="class")
+
+
+class RiskAssessment(BaseModel):
+    real_time_prediction: RealTimePrediction
+    historical_predictions: List[HistoricalPrediction]
+
+
+class StudentDataResponse(BaseModel):
+    student_info: StudentInfo
+    academic_performance: AcademicPerformance
+    risk_assessment: RiskAssessment
