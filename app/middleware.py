@@ -9,6 +9,8 @@ origins = [
     "http://localhost:3000",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "https://school-dropout-risk-assessment.vercel.app/",
+    "https://school-dropout-risk-assessment.vercel.app"
     "https://malimvenji-school-dropout-risk-asse.vercel.app/",
     "https://malimvenji-school-dropout-risk-asse.vercel.app/api/predict",
     "https://malimvenji-school-dropout-risk-asse.vercel.app/api/predict",
