@@ -348,7 +348,7 @@ async def get_classes_with_students(
         raise HTTPException(status_code=500, detail=f"Error retrieving classes with students: {str(e)}")
 
 @router.get("/classes/{class_id}", response_model=ClassResponse)
-async def get_class_by_id(class_id: str, db: Session = Depends(get_db)):
+async def get_class_by_id_new(class_id: str, db: Session = Depends(get_db)):
     """
     Get a specific class by ID
     """
@@ -755,7 +755,7 @@ async def remove_student_from_class(class_id: str, student_id: str, db: Session 
 
 # Additional useful endpoints
 @router.get("/classes/academic-year/{academic_year}", response_model=List[ClassResponse])
-async def get_classes_by_academic_year(academic_year: str, db: Session = Depends(get_db)):
+async def get_classes_by_academic_year_new(academic_year: str, db: Session = Depends(get_db)):
     """
     Get all classes for a specific academic year
     """

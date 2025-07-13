@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.crud.prediction import fetch_student_data, save_prediction_to_db
 from app.database import get_db
 from app.models.all_models import AcademicTerm, BullyingIncident, Class, DropoutPrediction, Guardian, Student, Subject, SubjectScore
-from app.schemas.ml_model import BatchPredictionRequest, BatchPredictionResponse, HealthCheckResponse, PredictionRequest, PredictionResponse, RiskDistributionResponse, StudentPredictionHistoryResponse, StudentWithRisk
+from app.schemas.ml_model import BatchPredictionRequest, BatchPredictionResponse, HealthCheckResponse, PredictionRequest, PredictionResponse, RiskDistributionResponse, StudentDataResponse, StudentPredictionHistoryResponse, StudentWithRisk
 from app.services.ml_model import generate_recommendations, get_contributing_factors
 from app.utils.ml_model import determine_risk_level, load_model_artifacts, preprocess_features
 from app.utils.system_utils import determine_system_status
@@ -41,7 +41,7 @@ async def health_check():
         }
     }
 
-@router.get("/student/{student_id}", response_model=Dict[str, Any])
+@router.get("/student/{student_id}", response_model=StudentDataResponse)
 async def get_student_data_with_realtime_prediction(
     student_id: UUID,
     db: Session = Depends(get_db)

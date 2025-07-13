@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from app.routes import (auth, teacher, students, 
                         classes, users, ml_model, dashboard, schedulers, academics,
-                        grades, new_classes
+                        grades, new_classes, subjects
                         
 )
                         
@@ -29,6 +29,8 @@ async def root():
     """
     return RedirectResponse(url="/docs")
 
+app.include_router(subjects.router)
+app.include_router(schedulers.router)
 app.include_router(new_classes.router)
 app.include_router(grades.router)
 app.include_router(academics.router)

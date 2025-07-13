@@ -115,6 +115,22 @@ class ClassResponse(BaseModel):
 
 class StudentWithClassResponse(StudentResponse):
     current_class: Optional[ClassResponse] = None
+    
+    @classmethod
+    def from_orm(cls, obj):
+        # Custom from_orm to handle class relationship
+        data = super().model_validate(obj)
+        if obj.class_:
+            data.current_class = ClassResponse(
+                id=obj.class_.id,
+                name=obj.class_.name,
+                code=obj.class_.code,
+                academic_year=obj.class_.academic_year
+            )
+        return data
+    
+    class Config:
+        from_attributes = True
 
 class StudentWithDetailsResponse(StudentWithGuardianResponse, StudentWithClassResponse):
     performance_history: Optional[List[TermPerformanceResponse]] = None
@@ -166,7 +182,8 @@ def get_student_performance(db: Session, student_id: UUID):
 
     performance = []
     for term in terms:
-        scores = db.query(
+        # Updated query to properly handle the joined data
+        score_records = db.query(
             SubjectScore,
             Subject.name.label('subject_name')
         ).join(
@@ -176,6 +193,18 @@ def get_student_performance(db: Session, student_id: UUID):
             SubjectScore.academic_term_id == term.id
         ).all()
 
+        subject_scores = []
+        for score_record in score_records:
+            # Access the score and subject_name correctly
+            subject_score = score_record[0]
+            subject_name = score_record[1]
+            
+            subject_scores.append(SubjectScoreResponse(
+                subject_name=subject_name,
+                score=subject_score.score,
+                grade=subject_score.grade
+            ))
+
         performance.append(TermPerformanceResponse(
             term_id=term.id,
             term_type=term.term_type,
@@ -184,16 +213,11 @@ def get_student_performance(db: Session, student_id: UUID):
             term_avg_score=term.term_avg_score,
             present_days=term.present_days,
             absent_days=term.absent_days,
-            subject_scores=[
-                SubjectScoreResponse(
-                    subject_name=score.subject_name,
-                    score=score.score,
-                    grade=score.grade
-                ) for score in scores
-            ]
+            subject_scores=subject_scores
         ))
 
     return performance
+
 
 # Student CRUD Endpoints
 @router.post("", response_model=StudentResponse, status_code=status.HTTP_201_CREATED)
@@ -246,7 +270,7 @@ async def get_students(
     status: Optional[StudentStatus] = None,
     class_id: Optional[UUID] = None,
     gender: Optional[Gender] = None,
-    include_performance: bool = False,
+    include_performance: bool = True,
     db: Session = Depends(get_db)
 ):
     query = db.query(Student).options(
@@ -268,7 +292,8 @@ async def get_students(
     
     student_responses = []
     for student in students:
-        student_data = StudentWithDetailsResponse.model_validate(student)
+        # Use the custom from_orm method
+        student_data = StudentWithDetailsResponse.from_orm(student)
         if include_performance:
             student_data.performance_history = get_student_performance(db, student.id)
         student_responses.append(student_data)

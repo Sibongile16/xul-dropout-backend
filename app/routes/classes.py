@@ -334,7 +334,7 @@ async def get_class_teachers(
 
 # Get class with students and teachers
 @router.get("/{class_id}/full-details", response_model=ClassFullDetailsResponse)
-async def get_class_full_details(
+async def get_class_full_details_new(
     class_id: UUID,
     include_performance: bool = False,
     db: Session = Depends(get_db)

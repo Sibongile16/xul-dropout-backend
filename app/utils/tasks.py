@@ -71,8 +71,8 @@ async def lifespan():
     scheduler.add_job(
         run_batch_predictions,
         'cron',
-        hour=2,
-        minute=0,
+        hour=17,
+        minute=8,
         id='batch_predictions'
     )
     scheduler.start()

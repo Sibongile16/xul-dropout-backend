@@ -122,7 +122,7 @@ def get_last_run_time(db: Session = Depends(get_db)):
     
     if last_run:
         return {
-            "last_run": last_run.completed_at.isoformat(),
+            "last_run": last_run.completed_at,
             "status": last_run.status,
             "success_count": last_run.success_count,
             "failure_count": last_run.failure_count
