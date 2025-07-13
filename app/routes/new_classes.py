@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter, HTTPException, Depends, Query, status
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, and_
@@ -9,6 +10,9 @@ from uuid import UUID
 from app.database import get_db
 from app.models.all_models import AcademicTerm, Class, StudentStatus, Teacher, Student, TeacherClass, User, Guardian, DropoutPrediction
 from app.utils.auth import get_current_user
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix='/api', tags=["classes-v2"])
 
@@ -762,71 +766,3 @@ async def get_classes_by_academic_year_new(academic_year: str, db: Session = Dep
     """
     return await get_classes(academic_year=academic_year, db=db)
 
-@router.get("/classes/students-by-teacher", response_model=List[ClassResponse])
-async def get_classes_by_teacher(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """
-    Get all classes assigned to a specific teacher
-    """
-    teacher:Teacher = current_user.teacher
-    if not teacher:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Only teachers and administrators can access this endpoint."
-        )
-    try:
-        
-        
-        # Get classes where this teacher is assigned
-        teacher_classes = db.query(TeacherClass).filter(
-            TeacherClass.teacher_id == teacher.id
-        ).all()
-        
-        class_ids = [tc.class_id for tc in teacher_classes]
-        
-        if not class_ids:
-            return []
-        
-        # Get the classes
-        classes = db.query(Class).options(
-            joinedload(Class.teachers).joinedload(TeacherClass.teacher).joinedload(Teacher.user)
-        ).filter(Class.id.in_(class_ids)).all()
-        
-        response_data = []
-        for class_obj in classes:
-            student_count = db.query(func.count(Student.id)).filter(
-                Student.class_id == class_obj.id
-            ).scalar() or 0
-            
-            # Find the teacher info for this specific teacher
-            teacher_name = None
-            for teacher_class in class_obj.teachers:
-                if teacher_class.teacher_id == teacher.id:
-                    teacher = teacher_class.teacher
-                    teacher_name = f"{teacher.first_name} {teacher.last_name}"
-                    break
-            
-            class_data = ClassResponse(
-                id=str(class_obj.id),
-                class_name=class_obj.name,
-                name=class_obj.name,
-                code=class_obj.code,
-                grade_level=extract_grade_level(class_obj.name),
-                academic_year=class_obj.academic_year,
-                max_capacity=class_obj.capacity or 40,
-                capacity=class_obj.capacity or 40,
-                current_enrollment=student_count,
-                teacher_id=teacher.id,
-                teacher_name=teacher_name,
-                description=f"Primary class for {extract_grade_level(class_obj.name)} students",
-                is_active=class_obj.is_active,
-                created_at=datetime.now().isoformat() + "Z",
-                updated_at=datetime.now().isoformat() + "Z"
-            )
-            response_data.append(class_data)
-        
-        return response_data
-        
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid teacher ID format")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error retrieving teacher classes: {str(e)}")
