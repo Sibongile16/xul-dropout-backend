@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, status
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, and_
 from typing import List, Optional
@@ -8,6 +8,7 @@ from uuid import UUID
 
 from app.database import get_db
 from app.models.all_models import AcademicTerm, Class, StudentStatus, Teacher, Student, TeacherClass, User, Guardian, DropoutPrediction
+from app.utils.auth import get_current_user
 
 router = APIRouter(prefix='/api', tags=["classes-v2"])
 
@@ -581,7 +582,7 @@ async def update_class(class_id: str, class_data: UpdateClassRequest, db: Sessio
 
 # Delete Class
 @router.delete("/classes/{class_id}", response_model=ClassResponse)
-async def delete_class(class_id: str, db: Session = Depends(get_db)):
+async def delete_class_new(class_id: str, db: Session = Depends(get_db)):
     """Delete a class (soft delete by setting is_active to False)"""
     try:
         class_uuid = UUID(class_id)
@@ -761,17 +762,23 @@ async def get_classes_by_academic_year_new(academic_year: str, db: Session = Dep
     """
     return await get_classes(academic_year=academic_year, db=db)
 
-@router.get("/classes/teacher/{teacher_id}", response_model=List[ClassResponse])
-async def get_classes_by_teacher(teacher_id: str, db: Session = Depends(get_db)):
+@router.get("/classes/students-by-teacher", response_model=List[ClassResponse])
+async def get_classes_by_teacher(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
     Get all classes assigned to a specific teacher
     """
+    teacher:Teacher = current_user.teacher
+    if not teacher:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. Only teachers and administrators can access this endpoint."
+        )
     try:
-        teacher_uuid = UUID(teacher_id)
+        
         
         # Get classes where this teacher is assigned
         teacher_classes = db.query(TeacherClass).filter(
-            TeacherClass.teacher_id == teacher_uuid
+            TeacherClass.teacher_id == teacher.id
         ).all()
         
         class_ids = [tc.class_id for tc in teacher_classes]
@@ -793,7 +800,7 @@ async def get_classes_by_teacher(teacher_id: str, db: Session = Depends(get_db))
             # Find the teacher info for this specific teacher
             teacher_name = None
             for teacher_class in class_obj.teachers:
-                if teacher_class.teacher_id == teacher_uuid:
+                if teacher_class.teacher_id == teacher.id:
                     teacher = teacher_class.teacher
                     teacher_name = f"{teacher.first_name} {teacher.last_name}"
                     break
@@ -808,7 +815,7 @@ async def get_classes_by_teacher(teacher_id: str, db: Session = Depends(get_db))
                 max_capacity=class_obj.capacity or 40,
                 capacity=class_obj.capacity or 40,
                 current_enrollment=student_count,
-                teacher_id=teacher_id,
+                teacher_id=teacher.id,
                 teacher_name=teacher_name,
                 description=f"Primary class for {extract_grade_level(class_obj.name)} students",
                 is_active=class_obj.is_active,
