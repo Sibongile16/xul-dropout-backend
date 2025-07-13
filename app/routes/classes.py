@@ -13,7 +13,7 @@ from enum import Enum
 
 router = APIRouter(prefix="/api/classes", tags=["classes"])
 
-# Pydantic models
+
 class ClassCreate(BaseModel):
     name: str
     code: str
@@ -154,47 +154,47 @@ def get_student_performance(db: Session, student_id: UUID):
     return performance
 
 # Create a new class
-@router.post("/", response_model=ClassResponse, status_code=status.HTTP_201_CREATED)
-async def create_class(class_data: ClassCreate, db: Session = Depends(get_db)):
-    # Check if class with same code and academic year already exists
-    existing_class = db.query(Class).filter(
-        Class.code == class_data.code,
-        Class.academic_year == class_data.academic_year
-    ).first()
+# @router.post("/", response_model=ClassResponse, status_code=status.HTTP_201_CREATED)
+# async def create_class(class_data: ClassCreate, db: Session = Depends(get_db)):
+#     # Check if class with same code and academic year already exists
+#     existing_class = db.query(Class).filter(
+#         Class.code == class_data.code,
+#         Class.academic_year == class_data.academic_year
+#     ).first()
     
-    if existing_class:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Class with this code already exists for the academic year"
-        )
+#     if existing_class:
+#         raise HTTPException(
+#             status_code=status.HTTP_400_BAD_REQUEST,
+#             detail="Class with this code already exists for the academic year"
+#         )
     
-    db_class = Class(**class_data.model_dump())
-    db.add(db_class)
-    db.commit()
-    db.refresh(db_class)
-    return db_class
+#     db_class = Class(**class_data.model_dump())
+#     db.add(db_class)
+#     db.commit()
+#     db.refresh(db_class)
+#     return db_class
 
 # Get all classes
-@router.get("/", response_model=ClassListResponse)
-async def get_classes(
-    skip: int = 0,
-    limit: int = 100,
-    is_active: Optional[bool] = None,
-    academic_year: Optional[str] = None,
-    db: Session = Depends(get_db)
-):
-    query = db.query(Class)
+# @router.get("/", response_model=ClassListResponse)
+# async def get_classes(
+#     skip: int = 0,
+#     limit: int = 100,
+#     is_active: Optional[bool] = None,
+#     academic_year: Optional[str] = None,
+#     db: Session = Depends(get_db)
+# ):
+#     query = db.query(Class)
     
-    if is_active is not None:
-        query = query.filter(Class.is_active == is_active)
+#     if is_active is not None:
+#         query = query.filter(Class.is_active == is_active)
     
-    if academic_year:
-        query = query.filter(Class.academic_year == academic_year)
+#     if academic_year:
+#         query = query.filter(Class.academic_year == academic_year)
     
-    classes = query.offset(skip).limit(limit).all()
-    total_count = query.count()
+#     classes = query.offset(skip).limit(limit).all()
+#     total_count = query.count()
     
-    return ClassListResponse(classes=classes, total_count=total_count)
+#     return ClassListResponse(classes=classes, total_count=total_count)
 
 # Get a class by ID
 @router.get("/{class_id}", response_model=ClassResponse)
@@ -247,7 +247,7 @@ async def get_classes_by_academic_year(
 
 # Get classes with students
 @router.get("/with-students", response_model=List[ClassWithStudentsResponse])
-async def get_classes_with_students(
+async def get_classes_with_all_students(
     academic_year: Optional[str] = None,
     is_active: Optional[bool] = None,
     include_performance: bool = False,
@@ -283,33 +283,33 @@ async def get_classes_with_students(
     return response
 
 # Get students by class ID
-@router.get("/{class_id}/students", response_model=List[StudentWithDetailsResponse])
-async def get_students_by_class_id(
-    class_id: UUID,
-    is_active: Optional[bool] = None,
-    include_performance: bool = False,
-    db: Session = Depends(get_db)
-):
-    query = db.query(Student).filter(
-        Student.class_id == class_id
-    ).options(
-        joinedload(Student.guardian),
-        joinedload(Student.class_)
-    )
+# @router.get("/{class_id}/students", response_model=List[StudentWithDetailsResponse])
+# async def get_students_by_class_id(
+#     class_id: UUID,
+#     is_active: Optional[bool] = None,
+#     include_performance: bool = False,
+#     db: Session = Depends(get_db)
+# ):
+#     query = db.query(Student).filter(
+#         Student.class_id == class_id
+#     ).options(
+#         joinedload(Student.guardian),
+#         joinedload(Student.class_)
+#     )
     
-    if is_active is not None:
-        query = query.filter(Student.status == StudentStatus.ACTIVE if is_active else Student.status != StudentStatus.ACTIVE)
+#     if is_active is not None:
+#         query = query.filter(Student.status == StudentStatus.ACTIVE if is_active else Student.status != StudentStatus.ACTIVE)
     
-    students = query.all()
+#     students = query.all()
     
-    response = []
-    for student in students:
-        student_data = StudentWithDetailsResponse.from_orm(student)
-        if include_performance:
-            student_data.performance_history = get_student_performance(db, student.id)
-        response.append(student_data)
+#     response = []
+#     for student in students:
+#         student_data = StudentWithDetailsResponse.from_orm(student)
+#         if include_performance:
+#             student_data.performance_history = get_student_performance(db, student.id)
+#         response.append(student_data)
     
-    return response
+#     return response
 
 # Get teachers assigned to a class
 @router.get("/{class_id}/teachers", response_model=List[TeacherResponse])
