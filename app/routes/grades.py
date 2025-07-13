@@ -8,7 +8,7 @@ from app.schemas.grades_schemas import EndOfTermReportInput
 
 
 
-router = APIRouter(prefix="/reports", tags=["End-of-Term Reports"])
+router = APIRouter(prefix="/api/reports", tags=["End-of-Term Reports"])
 
 @router.post("/submit-student-grades")
 def submit_term_report(data: EndOfTermReportInput, db: Session = Depends(get_db)):
