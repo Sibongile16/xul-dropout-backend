@@ -424,7 +424,7 @@ def get_academic_year_dates(academic_year: str):
 
 
 
-class ClassResponse(BaseModel):
+class ClassStudentResponse(BaseModel):
     id: UUID
     class_name: str
     name: str
@@ -444,7 +444,7 @@ class ClassResponse(BaseModel):
     class Config:
         from_attributes = True
 
-@router.get("/classes/students-by-teacher", response_model=List[ClassResponse])
+@router.get("/classes/students-by-teacher", response_model=List[ClassStudentResponse])
 async def get_all_students_by_teacher(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -483,7 +483,7 @@ async def get_all_students_by_teacher(
             # Get teacher name
             teacher_name = f"{current_user.teacher.first_name} {current_user.teacher.last_name}"
             
-            class_data = ClassResponse(
+            class_data = ClassStudentResponse(
                 id=class_obj.id,  # Keep as UUID, Pydantic will handle conversion
                 class_name=class_obj.name,
                 name=class_obj.name,
@@ -509,7 +509,7 @@ async def get_all_students_by_teacher(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving teacher classes: {str(e)}")
 
-@router.get("/classes", response_model=List[ClassResponse])
+@router.get("/classes", response_model=List[ClassStudentResponse])
 async def get_teacher_classes(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -561,7 +561,7 @@ async def get_teacher_classes(
         created_at = class_obj.created_at.isoformat() if hasattr(class_obj, 'created_at') and class_obj.created_at else datetime.now().isoformat()
         updated_at = class_obj.updated_at.isoformat() if hasattr(class_obj, 'updated_at') and class_obj.updated_at else datetime.now().isoformat()
         
-        class_response = ClassResponse(
+        class_response = ClassStudentResponse(
             id=class_obj.id,
             class_name=class_obj.name,
             name=class_obj.name,
@@ -604,7 +604,7 @@ def extract_grade_level(class_name: str, class_code: str) -> str:
     return "Unknown"
 
 # Alternative endpoint if you want to include class teacher information
-@router.get("/classes/detailed", response_model=List[ClassResponse])
+@router.get("/classes/detailed", response_model=List[ClassStudentResponse])
 async def get_teacher_classes_detailed(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -670,7 +670,7 @@ async def get_teacher_classes_detailed(
         created_at = class_obj.created_at.isoformat() if hasattr(class_obj, 'created_at') and class_obj.created_at else datetime.now().isoformat()
         updated_at = class_obj.updated_at.isoformat() if hasattr(class_obj, 'updated_at') and class_obj.updated_at else datetime.now().isoformat()
         
-        class_response = ClassResponse(
+        class_response = ClassStudentResponse(
             id=class_obj.id,
             class_name=class_obj.name,
             name=class_obj.name,
