@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.all_models import Guardian
 
-router = APIRouter(prefix="/guardians", tags=["guardians"])
+router = APIRouter(prefix="/api/guardians", tags=["guardians"])
 
 # Enums
 class RelationshipType(str, Enum):
