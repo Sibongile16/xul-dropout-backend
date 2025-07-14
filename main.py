@@ -2,9 +2,11 @@ from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from app.routes import (auth, teacher, students, 
                         classes, users, ml_model, dashboard, schedulers, academics,
-                        grades, new_classes, subjects
+                        grades, new_classes, subjects,
+                        guardians
                         
 )
+
                         
 from app.middleware import add_cors_middleware
 from contextlib import asynccontextmanager
@@ -29,6 +31,7 @@ async def root():
     """
     return RedirectResponse(url="/docs")
 
+app.include_router(guardians.router)
 app.include_router(subjects.router)
 app.include_router(schedulers.router)
 app.include_router(new_classes.router)
