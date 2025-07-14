@@ -24,5 +24,5 @@ class EndOfTermReportInput(BaseModel):
     present_days: int
     absent_days: int
     subject_scores: List[SubjectScoreInput]
-    remarks: Optional[str] = None  # Optional field
+    remarks: Optional[str] = None
 
