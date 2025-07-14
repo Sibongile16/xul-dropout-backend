@@ -114,8 +114,7 @@ async def get_all_guardians(
     """
     total_count = db.query(Guardian).count()
     guardians = db.query(Guardian).offset((page-1)*limit).limit(limit).all()
-    
-    # Transform guardian objects to include missing fields with None
+
     transformed_guardians = []
     for guardian in guardians:
         guardian_dict = {
