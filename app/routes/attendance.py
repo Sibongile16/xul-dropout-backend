@@ -34,12 +34,35 @@ class AttendanceUpdate(BaseModel):
 
 class AttendanceResponse(AttendanceBase):
     id: UUID
+    student_name: str
+    class_name: str
     marked_by_teacher_id: Optional[UUID] = None
     created_at: datetime
     updated_at: datetime
     
-    class Config:
-        orm_mode = True
+    @classmethod
+    def from_orm_with_names(cls, db_attendance: DailyAttendance, db: Session):
+        # Get student name
+        student = db.query(Student).filter(Student.id == db_attendance.student_id).first()
+        student_name = f"{student.first_name} {student.last_name}" if student else "Unknown Student"
+        
+        # Get class name
+        class_ = db.query(Class).filter(Class.id == db_attendance.class_id).first()
+        class_name = class_.name if class_ else "Unknown Class"
+        
+        return cls(
+            id=db_attendance.id,
+            student_id=db_attendance.student_id,
+            student_name=student_name,
+            class_id=db_attendance.class_id,
+            class_name=class_name,
+            attendance_date=db_attendance.attendance_date,
+            status=db_attendance.status,
+            notes=db_attendance.notes,
+            marked_by_teacher_id=db_attendance.marked_by_teacher_id,
+            created_at=db_attendance.created_at,
+            updated_at=db_attendance.updated_at
+        )
 
 class AttendanceBulkRecord(BaseModel):
     student_id: UUID
@@ -73,7 +96,6 @@ class AttendanceSummaryResponse(BaseModel):
     absent_days: int
     late_days: int
     attendance_percentage: float
-
 
 
 @router.post("/", response_model=AttendanceResponse, status_code=status.HTTP_201_CREATED)
@@ -133,7 +155,7 @@ def create_attendance_record(
     db.commit()
     db.refresh(new_attendance)
     
-    return new_attendance
+    return AttendanceResponse.from_orm_with_names(new_attendance, db)
 
 @router.post("/bulk", response_model=List[AttendanceResponse], status_code=status.HTTP_201_CREATED)
 def create_bulk_attendance_records(
@@ -198,7 +220,7 @@ def create_bulk_attendance_records(
     
     db.commit()
     
-    return new_attendance_records
+    return [AttendanceResponse.from_orm_with_names(record, db) for record in new_attendance_records]
 
 @router.get("/student/{student_id}", response_model=List[AttendanceResponse])
 def get_student_attendance_history(
@@ -240,7 +262,7 @@ def get_student_attendance_history(
     
     attendance_records = query.order_by(DailyAttendance.attendance_date.desc()).all()
     
-    return attendance_records
+    return [AttendanceResponse.from_orm_with_names(record, db) for record in attendance_records]
 
 @router.get("/class/{class_id}", response_model=List[AttendanceResponse])
 def get_class_attendance_for_date(
@@ -276,7 +298,7 @@ def get_class_attendance_for_date(
         DailyAttendance.attendance_date == attendance_date
     ).all()
     
-    return attendance_records
+    return [AttendanceResponse.from_orm_with_names(record, db) for record in attendance_records]
 
 @router.get("/class/{class_id}/stats", response_model=AttendanceStatsResponse)
 def get_class_attendance_stats(
@@ -434,7 +456,7 @@ def update_attendance_record(
     db.commit()
     db.refresh(attendance_record)
     
-    return attendance_record
+    return AttendanceResponse.from_orm_with_names(attendance_record, db)
 
 @router.delete("/{attendance_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_attendance_record(
