@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Float, Date, DateTime, Boolean, Text, ForeignKey, Enum as SQLEnum, JSON
+from sqlalchemy import Column, String, Integer, Float, Date, DateTime, Boolean, Text, ForeignKey, Enum as SQLEnum, JSON, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
@@ -107,6 +107,8 @@ class Teacher(Base):
     
     user = relationship("User", back_populates="teacher")
     classes = relationship("TeacherClass", back_populates="teacher")
+    daily_attendance = relationship("DailyAttendance", back_populates="teacher")
+    
 
 class Class(Base):
     __tablename__ = "classes"
@@ -120,6 +122,8 @@ class Class(Base):
     
     teachers = relationship("TeacherClass", back_populates="class_")
     students = relationship("Student", back_populates="class_")
+    daily_attendance = relationship("DailyAttendance", back_populates="class_")
+    
 
 class TeacherClass(Base):
     __tablename__ = "teacher_classes"
@@ -180,6 +184,8 @@ class Student(Base):
     academic_terms = relationship("AcademicTerm", back_populates="student")
     bullying_incidents = relationship("BullyingIncident", back_populates="student")
     dropout_predictions = relationship("DropoutPrediction", back_populates="student")
+    daily_attendance = relationship("DailyAttendance", back_populates="student")
+
 
 class Subject(Base):
     __tablename__ = "subjects"
@@ -284,3 +290,34 @@ class PredictionTaskHistory(Base):
     status = Column(String(20))  # 'running', 'completed', 'failed'
     error_message = Column(Text)
     duration_seconds = Column(Integer)
+    
+    
+
+class AttendanceStatus(str, Enum):
+    PRESENT = "present"
+    ABSENT = "absent"
+    LATE = "late"
+
+# Simple daily attendance model
+class DailyAttendance(Base):
+    """Simple daily attendance tracking for students"""
+    __tablename__ = "daily_attendance"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    student_id = Column(UUID(as_uuid=True), ForeignKey("students.id"), nullable=False)
+    class_id = Column(UUID(as_uuid=True), ForeignKey("classes.id"), nullable=False)
+    attendance_date = Column(Date, nullable=False)
+    status = Column(SQLEnum(AttendanceStatus), nullable=False, default=AttendanceStatus.ABSENT)
+    notes = Column(Text)  # Optional notes (reason for absence, etc.)
+    marked_by_teacher_id = Column(UUID(as_uuid=True), ForeignKey("teachers.id"))
+    created_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")))
+    updated_at = Column(DateTime, default=datetime.now(timezone("Africa/Blantyre")), onupdate=datetime.now(timezone("Africa/Blantyre")))
+    
+    
+    # Ensure one attendance record per student per day
+    __table_args__ = (
+        UniqueConstraint('student_id', 'attendance_date', name='unique_student_daily_attendance'),
+    )
+    student = relationship("Student", back_populates="daily_attendance")
+    teacher = relationship("Teacher", back_populates="daily_attendance")
+    class_ = relationship("Class", back_populates="daily_attendance")
