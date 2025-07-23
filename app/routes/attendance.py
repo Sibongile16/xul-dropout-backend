@@ -174,9 +174,42 @@ def create_bulk_attendance_records(
     if len(students) != len(student_ids):
         raise HTTPException(status_code=404, detail="One or more students not found")
     
-    class_id = students[0].class_id
-    if not all(student.class_id == class_id for student in students):
-        raise HTTPException(status_code=400, detail="All students must belong to the same class")
+    # Find students with class assignments
+    students_with_class = [s for s in students if s.class_id is not None]
+    students_without_class = [s for s in students if s.class_id is None]
+    
+    # Determine the target class_id from students who already have class assignments
+    if students_with_class:
+        # Use the class_id from students who already have one
+        class_id = students_with_class[0].class_id
+        
+        # Check if all students with classes belong to the same class
+        students_in_different_class = [s for s in students_with_class if s.class_id != class_id]
+        if students_in_different_class:
+            student_names = [f"{s.first_name} {s.last_name}" for s in students_in_different_class]
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Students belong to different classes: {', '.join(student_names)}"
+            )
+        
+        # Force assign students without class to the same class as their classmates
+        if students_without_class:
+            student_names = [f"{s.first_name} {s.last_name}" for s in students_without_class]
+            print(f"Force assigning students to class {class_id}: {', '.join(student_names)}")
+            
+            for student in students_without_class:
+                student.class_id = class_id
+            
+            # Commit the class assignments
+            db.commit()
+            
+    else:
+        # All students are without class assignment - cannot proceed
+        student_names = [f"{s.first_name} {s.last_name}" for s in students_without_class]
+        raise HTTPException(
+            status_code=400, 
+            detail=f"All students are unassigned to any class. Please assign them to a class first: {', '.join(student_names)}"
+        )
     
     # For teachers, verify they teach this class
     if current_user.role == UserRole.TEACHER:
@@ -207,13 +240,16 @@ def create_bulk_attendance_records(
     # Create new records
     new_attendance_records = []
     for record in bulk_data.records:
+        # Find the student to get their class_id
+        student = next(s for s in students if str(s.id) == str(record.student_id))
+        
         new_record = DailyAttendance(
             student_id=record.student_id,
-            class_id=class_id,
+            class_id=student.class_id,
             attendance_date=bulk_data.attendance_date,
             status=record.status,
             notes=record.notes,
-            marked_by_teacher_id=current_user.id if current_user.role != UserRole.ADMIN else None
+            marked_by_teacher_id=teacher.id if current_user.role == UserRole.TEACHER else None
         )
         new_attendance_records.append(new_record)
         db.add(new_record)

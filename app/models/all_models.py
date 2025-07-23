@@ -294,9 +294,9 @@ class PredictionTaskHistory(Base):
     
 
 class AttendanceStatus(str, Enum):
-    PRESENT = "present"
-    ABSENT = "absent"
-    LATE = "late"
+    PRESENT = "PRESENT"   # now uppercase
+    ABSENT = "ABSENT"     # uppercase
+    LATE = "LATE"         # uppercase
 
 # Simple daily attendance model
 class DailyAttendance(Base):
