@@ -4,11 +4,11 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, and_
 from typing import List, Optional
 from pydantic import BaseModel, Field
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from app.database import get_db
-from app.models.all_models import AcademicTerm, Class, StudentStatus, Teacher, Student, TeacherClass, User, Guardian, DropoutPrediction
+from app.models.all_models import AcademicTerm, Class, DailyAttendance, StudentStatus, Teacher, Student, TeacherClass, User, Guardian, DropoutPrediction
 from app.utils.auth import get_current_user
 
 logging.basicConfig(level=logging.INFO)
@@ -644,19 +644,58 @@ async def delete_class_new(class_id: str, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error deleting class: {str(e)}")
 
+class GuardianResponse(BaseModel):
+    first_name: str
+    last_name: str
+    relationship_to_student: str
+    phone_number: str
+
+
+class StudentClassListResponse(BaseModel):
+    id: UUID
+    first_name: str
+    last_name: str
+    student_number: str
+    age: int
+    gender: str
+    is_active: bool
+    attendance_status: str
+    guardian: GuardianResponse
+
+
+
+    
+
 # Get Class Students
-@router.get("/classes/{class_id}/students")
-async def get_class_students(class_id: str, db: Session = Depends(get_db)):
-    """Get all students in a class"""
+@router.get("/classes/{class_id}/students", response_model=List[StudentClassListResponse])
+async def get_class_students(
+    class_id: str, 
+    date: date = date.today(),  # Optional date parameter, defaults to today
+    db: Session = Depends(get_db)
+):
+    """Get all students in a class with their attendance status for the specified date"""
     try:
         class_uuid = UUID(class_id)
         
+        # Get all students in the class with their guardians
         students = db.query(Student).options(
             joinedload(Student.guardian)
         ).filter(Student.class_id == class_uuid).all()
         
+        # Get attendance records for these students on the specified date
+        attendance_records = db.query(DailyAttendance).filter(
+            DailyAttendance.student_id.in_([s.id for s in students]),
+            DailyAttendance.attendance_date == date
+        ).all()
+        
+        # Create a mapping of student_id to attendance status
+        attendance_map = {str(rec.student_id): rec.status.value.lower() for rec in attendance_records}
+        
         student_list = []
         for student in students:
+            # Get attendance status or None if no record exists
+            status = attendance_map.get(str(student.id))
+            
             student_data = {
                 "id": str(student.id),
                 "first_name": student.first_name,
@@ -665,6 +704,7 @@ async def get_class_students(class_id: str, db: Session = Depends(get_db)):
                 "age": student.age,
                 "gender": student.gender.value if student.gender else None,
                 "is_active": student.status == StudentStatus.ACTIVE,
+                "attendance_status": status,  # Add the status field
                 "guardian": {
                     "first_name": student.guardian.first_name if student.guardian else "",
                     "last_name": student.guardian.last_name if student.guardian else "",
@@ -675,12 +715,10 @@ async def get_class_students(class_id: str, db: Session = Depends(get_db)):
             student_list.append(student_data)
         
         return student_list
-        
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid class ID format")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error retrieving class students: {str(e)}")
-
+    
+    
 # Add Student to Class
 @router.post("/classes/{class_id}/students", response_model=SuccessResponse)
 async def add_student_to_class(
