@@ -1,7 +1,7 @@
 from enum import Enum
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import date, datetime
@@ -14,9 +14,9 @@ router = APIRouter(prefix="/api/attendance", tags=["Attendance"])
 
 
 class AttendanceStatus(str, Enum):
-    PRESENT = "present"
-    ABSENT = "absent"
-    LATE = "late"
+    PRESENT = "PRESENT"
+    ABSENT = "ABSENT"
+    LATE = "LATE"
 
 class AttendanceBase(BaseModel):
     student_id: UUID
@@ -66,8 +66,15 @@ class AttendanceResponse(AttendanceBase):
 
 class AttendanceBulkRecord(BaseModel):
     student_id: UUID
-    status: AttendanceStatus
+    status: str
     notes: Optional[str] = None
+
+    @field_validator('status')
+    def validate_and_convert_status(cls, v):
+        upper_status = v.upper()
+        if upper_status not in {'PRESENT', 'ABSENT', 'LATE'}:
+            raise ValueError("Status must be 'present', 'absent', or 'late' (case insensitive)")
+        return upper_status
 
 class AttendanceBulkCreate(BaseModel):
     attendance_date: date
@@ -247,7 +254,7 @@ def create_bulk_attendance_records(
             student_id=record.student_id,
             class_id=student.class_id,
             attendance_date=bulk_data.attendance_date,
-            status=record.status,
+            status=record.status.upper(),
             notes=record.notes,
             marked_by_teacher_id=teacher.id if current_user.role == UserRole.TEACHER else None
         )
