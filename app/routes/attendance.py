@@ -37,6 +37,8 @@ class AttendanceResponse(AttendanceBase):
     student_name: str
     class_name: str
     marked_by_teacher_id: Optional[UUID] = None
+    marked_by_teacher_name: Optional[str] = None
+    
     created_at: datetime
     updated_at: datetime
     
@@ -49,6 +51,10 @@ class AttendanceResponse(AttendanceBase):
         # Get class name
         class_ = db.query(Class).filter(Class.id == db_attendance.class_id).first()
         class_name = class_.name if class_ else "Unknown Class"
+        # Get teacher name if marked by teacher
+        if db_attendance.marked_by_teacher_id:
+            teacher = db.query(Teacher).filter(Teacher.id == db_attendance.marked_by_teacher_id).first()
+            marked_by_teacher_name = f"{teacher.first_name} {teacher.last_name}" if teacher else "Unknown Teacher"
         
         return cls(
             id=db_attendance.id,
@@ -60,6 +66,7 @@ class AttendanceResponse(AttendanceBase):
             status=db_attendance.status,
             notes=db_attendance.notes,
             marked_by_teacher_id=db_attendance.marked_by_teacher_id,
+            marked_by_teacher_name=marked_by_teacher_name if db_attendance.marked_by_teacher_id else None,
             created_at=db_attendance.created_at,
             updated_at=db_attendance.updated_at
         )
@@ -256,7 +263,7 @@ def create_bulk_attendance_records(
             attendance_date=bulk_data.attendance_date,
             status=record.status.upper(),
             notes=record.notes,
-            marked_by_teacher_id=teacher.id if current_user.role == UserRole.TEACHER else None
+            marked_by_teacher_id=teacher.id if current_user.role == UserRole.TEACHER else None,
         )
         new_attendance_records.append(new_record)
         db.add(new_record)
