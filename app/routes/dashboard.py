@@ -1,7 +1,7 @@
 from datetime import date, datetime
 import logging
 from uuid import UUID
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, desc, func, case
@@ -20,6 +20,26 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
+async def get_teacher_class_ids(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> List[UUID]:
+    """Get all class IDs that the current teacher is assigned to"""
+    if not current_user.teacher:
+        raise HTTPException(status_code=403, detail="Only teachers can access this data")
+    
+    teacher_classes = db.query(TeacherClass.class_id).filter(
+        TeacherClass.teacher_id == current_user.teacher.id
+    ).all()
+    
+    return [tc.class_id for tc in teacher_classes]
+
+async def teacher_students_only(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+) -> Query:
+    class_ids = await get_teacher_class_ids(current_user, db)
+    return db.query(Student).filter(Student.class_id.in_(class_ids))
 class StudentRiskResponse(BaseModel):
     id: UUID
     name: str
@@ -84,28 +104,14 @@ class TeacherProfile(BaseModel):
     qualification: Optional[str]
     experience_years: Optional[int]
 
-
 @router.get("/students/class/{class_id}", response_model=DashboardClassResponse)
 async def get_students_by_class(
     class_id: UUID,
-    current_user: User = Depends(get_current_user),
+    class_ids: List[UUID] = Depends(get_teacher_class_ids),
     db: Session = Depends(get_db)
 ):
-    # Get teacher record
-    teacher = db.query(Teacher).filter(Teacher.user_id == current_user.id).first()
-    if not teacher:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
-            detail="Teacher not found"
-        )
-
-    # Verify teacher teaches this class
-    teaches_class = db.query(TeacherClass).filter(
-        TeacherClass.teacher_id == teacher.id,
-        TeacherClass.class_id == class_id
-    ).first()
-    
-    if not teaches_class:
+    # Verify the requested class is one the teacher teaches
+    if class_id not in class_ids:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not teach this class"
@@ -197,23 +203,20 @@ async def get_students_by_class(
         students=student_data,
         risk_distribution=RiskDistributionResponse(**risk_distribution)
     )
-    
 
 @router.get("/stats", response_model=DashboardStats)
 async def get_dashboard_stats(
-    current_user: User = Depends(get_current_user),
+    class_ids: List[UUID] = Depends(get_teacher_class_ids),
     db: Session = Depends(get_db)
 ):
-    """
-    Get dashboard statistics for teacher
-    """
-    # Get classes taught by this teacher
-    teacher_classes = db.query(Class).join(
-        TeacherClass, Class.id == TeacherClass.class_id
-    ).filter(TeacherClass.teacher_id == current_user.teacher.id).all()
-    
-    class_ids = [cls.id for cls in teacher_classes]
-    
+    if not class_ids:
+        return DashboardStats(
+            total_students=0,
+            at_risk_students=0,
+            total_classes=0,
+            average_attendance=0
+        )
+
     # Total students in teacher's classes
     total_students = db.query(Student).filter(
         Student.class_id.in_(class_ids),
@@ -230,7 +233,7 @@ async def get_dashboard_stats(
     ).distinct().count()
     
     # Total classes
-    total_classes = len(teacher_classes)
+    total_classes = len(class_ids)
     
     # Average attendance (last 30 days)
     recent_terms = db.query(AcademicTerm).join(
@@ -256,19 +259,12 @@ async def get_dashboard_stats(
 
 @router.get("/risk-distribution", response_model=RiskDistribution)
 async def get_risk_distribution(
-    current_user: User = Depends(get_current_user),
+    class_ids: List[UUID] = Depends(get_teacher_class_ids),
     db: Session = Depends(get_db)
 ):
-    """
-    Get risk level distribution for teacher's students
-    """
-    # Get classes taught by this teacher
-    teacher_classes = db.query(Class).join(
-        TeacherClass, Class.id == TeacherClass.class_id
-    ).filter(TeacherClass.teacher_id == current_user.teacher.id).all()
-    
-    class_ids = [cls.id for cls in teacher_classes]
-    
+    if not class_ids:
+        return RiskDistribution(low=0, medium=0, high=0, critical=0)
+
     # Get latest predictions for each student
     subquery = db.query(
         DropoutPrediction.student_id,
@@ -304,20 +300,12 @@ async def get_risk_distribution(
 @router.get("/students/recent", response_model=List[StudentSummary])
 async def get_recent_students(
     limit: int = 10,
-    current_user: User = Depends(get_current_user),
+    class_ids: List[UUID] = Depends(get_teacher_class_ids),
     db: Session = Depends(get_db)
 ):
-    """
-    Get recently enrolled students in teacher's classes
-    """
-    # Get classes taught by this teacher
-    teacher_classes = db.query(Class).join(
-        TeacherClass, Class.id == TeacherClass.class_id
-    ).filter(TeacherClass.teacher_id == current_user.teacher.id).all()
-    
-    class_ids = [cls.id for cls in teacher_classes]
-    
-    # Get recent students with their latest risk assessment
+    if not class_ids:
+        return []
+
     students = db.query(Student).options(
         joinedload(Student.class_),
         joinedload(Student.dropout_predictions)
@@ -328,12 +316,10 @@ async def get_recent_students(
     
     result = []
     for student in students:
-        # Get latest risk assessment
         latest_prediction = None
         if student.dropout_predictions:
             latest_prediction = max(student.dropout_predictions, key=lambda x: x.prediction_date)
         
-        # Get latest attendance
         latest_term = db.query(AcademicTerm).filter(
             AcademicTerm.student_id == student.id
         ).order_by(desc(AcademicTerm.created_at)).first()
@@ -359,20 +345,12 @@ async def get_recent_students(
 
 @router.get("/students/at-risk", response_model=List[AtRiskStudent])
 async def get_at_risk_students(
-    current_user: User = Depends(get_current_user),
+    class_ids: List[UUID] = Depends(get_teacher_class_ids),
     db: Session = Depends(get_db)
 ):
-    """
-    Get students at risk of dropping out with ML-generated insights
-    """
-    # Get classes taught by this teacher
-    teacher_classes = db.query(Class).join(
-        TeacherClass, Class.id == TeacherClass.class_id
-    ).filter(TeacherClass.teacher_id == current_user.teacher.id).all()
-    
-    class_ids = [cls.id for cls in teacher_classes]
-    
-    # Get latest predictions for at-risk students
+    if not class_ids:
+        return []
+
     subquery = db.query(
         DropoutPrediction.student_id,
         func.max(DropoutPrediction.prediction_date).label('max_date')
@@ -390,14 +368,13 @@ async def get_at_risk_students(
             DropoutPrediction.prediction_date == subquery.c.max_date
         )
     ).filter(
-        Student.class_id.in_(class_ids),
+        Class.id.in_(class_ids),
         Student.status == StudentStatus.ACTIVE,
         DropoutPrediction.risk_level.in_([RiskLevel.HIGH, RiskLevel.CRITICAL])
     ).order_by(desc(DropoutPrediction.risk_score)).all()
     
     result = []
     for student, prediction, class_ in at_risk_data:
-        # Parse contributing factors and recommendations
         factors = prediction.contributing_factors or []
         if isinstance(factors, dict):
             factors = list(factors.keys()) if factors else []
@@ -426,9 +403,6 @@ async def get_teacher_profile(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """
-    Get current teacher's profile
-    """
     teacher_with_user = db.query(Teacher).options(
         joinedload(Teacher.user)
     ).filter(Teacher.id == current_user.teacher.id).first()
@@ -446,30 +420,22 @@ async def get_teacher_profile(
 @router.post("/students/{student_id}/predict-risk")
 async def predict_student_risk(
     student_id: str,
-    current_user: User = Depends(get_current_user),
+    class_ids: List[UUID] = Depends(get_teacher_class_ids),
     db: Session = Depends(get_db)
 ):
-    """
-    Generate ML prediction for a specific student
-    """
     try:
         # Verify student is in teacher's classes
-        student = db.query(Student).join(
-            Class, Student.class_id == Class.id
-        ).join(
-            TeacherClass, Class.id == TeacherClass.class_id
-        ).filter(
+        student = db.query(Student).filter(
             Student.id == student_id,
-            TeacherClass.teacher_id == current_user.teacher.id
+            Student.class_id.in_(class_ids)
         ).first()
         
         if not student:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Student not found or not in your classes"
+                detail="Student not found in your classes"
             )
         
-        # Fetch student data using your service
         student_data = await fetch_student_data(student_id, db)
         if not student_data:
             raise HTTPException(
@@ -477,11 +443,8 @@ async def predict_student_risk(
                 detail="Student data not found"
             )
         
-        # For demonstration, simulate ML prediction
-        # In production, you would call your actual ML model here
-        mock_probability = 0.65  # This would come from your ML model
+        mock_probability = 0.65
         
-        # Determine risk level based on probability
         if mock_probability >= 0.8:
             risk_level = RiskLevel.CRITICAL
         elif mock_probability >= 0.6:
@@ -491,11 +454,9 @@ async def predict_student_risk(
         else:
             risk_level = RiskLevel.LOW
         
-        # Generate contributing factors and recommendations
         contributing_factors = get_contributing_factors(student_data, mock_probability)
         recommendations = generate_recommendations(risk_level, contributing_factors)
         
-        # Create prediction response
         prediction = PredictionResponse(
             student_id=student_id,
             dropout_risk_probability=mock_probability,
@@ -505,7 +466,6 @@ async def predict_student_risk(
             prediction_date=date.today()
         )
         
-        # Save prediction to database
         await save_prediction_to_db(prediction, db)
         
         return {
@@ -527,30 +487,21 @@ async def predict_student_risk(
 @router.get("/students/{student_id}/detailed-data")
 async def get_student_detailed_data(
     student_id: UUID,
-    current_user: User = Depends(get_current_user),
+    class_ids: List[UUID] = Depends(get_teacher_class_ids),
     db: Session = Depends(get_db)
 ):
-    """
-    Get detailed student data used for ML predictions
-    """
     try:
-        # Verify student is in teacher's classes
-        student = db.query(Student).join(
-            Class, Student.class_id == Class.id
-        ).join(
-            TeacherClass, Class.id == TeacherClass.class_id
-        ).filter(
+        student = db.query(Student).filter(
             Student.id == student_id,
-            TeacherClass.teacher_id == current_user.teacher.id
+            Student.class_id.in_(class_ids)
         ).first()
         
         if not student:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Student not found or not in your classes"
+                detail="Student not found in your classes"
             )
         
-        # Fetch student data using your service
         student_data = await fetch_student_data(student_id, db)
         if not student_data:
             raise HTTPException(
@@ -558,7 +509,6 @@ async def get_student_detailed_data(
                 detail="Student data not found"
             )
         
-        # Get latest prediction if exists
         latest_prediction = db.query(DropoutPrediction).filter(
             DropoutPrediction.student_id == student_id
         ).order_by(desc(DropoutPrediction.prediction_date)).first()
@@ -596,26 +546,21 @@ async def get_student_detailed_data(
 @router.post("/students/batch-predict")
 async def batch_predict_students(
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user),
+    class_ids: List[UUID] = Depends(get_teacher_class_ids),
     db: Session = Depends(get_db)
 ):
-    """
-    Trigger batch prediction for all students in teacher's classes
-    """
     try:
-        # Get all active students in teacher's classes
-        teacher_classes = db.query(Class).join(
-            TeacherClass, Class.id == TeacherClass.class_id
-        ).filter(TeacherClass.teacher_id == current_user.teacher.id).all()
-        
-        class_ids = [cls.id for cls in teacher_classes]
+        if not class_ids:
+            return {
+                "message": "No students to predict",
+                "student_count": 0
+            }
         
         students = db.query(Student).filter(
             Student.class_id.in_(class_ids),
             Student.status == StudentStatus.ACTIVE
         ).all()
         
-        # Add batch prediction task to background
         background_tasks.add_task(
             process_batch_predictions,
             [str(student.id) for student in students],
@@ -634,79 +579,22 @@ async def batch_predict_students(
             detail=f"Error starting batch prediction: {str(e)}"
         )
 
-async def process_batch_predictions(student_ids: List[str], db: Session):
-    """
-    Background task to process batch predictions
-    """
-    logger.info(f"Starting batch prediction for {len(student_ids)} students")
-    
-    for student_id in student_ids:
-        try:
-            # Fetch student data
-            student_data = await fetch_student_data(student_id, db)
-            if not student_data:
-                logger.warning(f"No data found for student {student_id}")
-                continue
-            
-            # Mock ML prediction (replace with actual ML model call)
-            mock_probability = 0.5  # This would come from your ML model
-            
-            # Determine risk level
-            if mock_probability >= 0.8:
-                risk_level = RiskLevel.CRITICAL
-            elif mock_probability >= 0.6:
-                risk_level = RiskLevel.HIGH
-            elif mock_probability >= 0.4:
-                risk_level = RiskLevel.MEDIUM
-            else:
-                risk_level = RiskLevel.LOW
-            
-            # Generate insights
-            contributing_factors = get_contributing_factors(student_data, mock_probability)
-            recommendations = generate_recommendations(risk_level, contributing_factors)
-            
-            # Create and save prediction
-            prediction = PredictionResponse(
-                student_id=student_id,
-                dropout_risk_probability=mock_probability,
-                risk_level=risk_level,
-                contributing_factors=contributing_factors,
-                recommendations=recommendations,
-                prediction_date=date.today()
-            )
-            
-            await save_prediction_to_db(prediction, db)
-            logger.info(f"Prediction saved for student {student_id}")
-            
-        except Exception as e:
-            logger.error(f"Error processing prediction for student {student_id}: {e}")
-            continue
-    
-    logger.info("Batch prediction completed")
-
 @router.get("/students/{student_id}/bullying-incidents")
 async def get_student_bullying_incidents(
     student_id: UUID,
-    current_user: User = Depends(get_current_user),
+    class_ids: List[UUID] = Depends(get_teacher_class_ids),
     db: Session = Depends(get_db)
 ):
-    """
-    Get bullying incidents for a specific student
-    """
     # Verify student is in teacher's classes
-    student = db.query(Student).join(
-        Class, Student.class_id == Class.id
-    ).join(
-        TeacherClass, Class.id == TeacherClass.class_id
-    ).filter(
+    student = db.query(Student).filter(
         Student.id == student_id,
-        TeacherClass.teacher_id == current_user.teacher.id
+        Student.class_id.in_(class_ids)
     ).first()
     
     if not student:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Student not found or not in your classes"
+            detail="Student not found in your classes"
         )
     
     incidents = db.query(BullyingIncident).filter(
@@ -724,3 +612,45 @@ async def get_student_bullying_incidents(
         "action_taken": incident.action_taken
     } for incident in incidents]
 
+async def process_batch_predictions(student_ids: List[str], db: Session):
+    """Background task to process batch predictions"""
+    logger.info(f"Starting batch prediction for {len(student_ids)} students")
+    
+    for student_id in student_ids:
+        try:
+            student_data = await fetch_student_data(student_id, db)
+            if not student_data:
+                logger.warning(f"No data found for student {student_id}")
+                continue
+            
+            mock_probability = 0.5
+            
+            if mock_probability >= 0.8:
+                risk_level = RiskLevel.CRITICAL
+            elif mock_probability >= 0.6:
+                risk_level = RiskLevel.HIGH
+            elif mock_probability >= 0.4:
+                risk_level = RiskLevel.MEDIUM
+            else:
+                risk_level = RiskLevel.LOW
+            
+            contributing_factors = get_contributing_factors(student_data, mock_probability)
+            recommendations = generate_recommendations(risk_level, contributing_factors)
+            
+            prediction = PredictionResponse(
+                student_id=student_id,
+                dropout_risk_probability=mock_probability,
+                risk_level=risk_level,
+                contributing_factors=contributing_factors,
+                recommendations=recommendations,
+                prediction_date=date.today()
+            )
+            
+            await save_prediction_to_db(prediction, db)
+            logger.info(f"Prediction saved for student {student_id}")
+            
+        except Exception as e:
+            logger.error(f"Error processing prediction for student {student_id}: {e}")
+            continue
+    
+    logger.info("Batch prediction completed")
