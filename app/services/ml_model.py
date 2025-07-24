@@ -25,7 +25,7 @@ def get_contributing_factors(features: Dict[str, Any], probability: float) -> Li
     if features['household_income'] == 'low':
         factors.append("Low household income")
     
-    if features['distance_to_school'] > 10:
+    if features['distance_to_school'] > 7:
         factors.append("Long distance to school")
     
     if features['special_learning']:
