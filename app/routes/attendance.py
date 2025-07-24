@@ -162,7 +162,7 @@ def create_attendance_record(
         attendance_date=attendance.attendance_date,
         status=attendance.status,
         notes=attendance.notes,
-        marked_by_teacher_id=current_user.id if current_user.role != UserRole.ADMIN else None
+        marked_by_teacher_id=current_user.teacher.id if current_user.role != UserRole.ADMIN else None
     )
     
     db.add(new_attendance)
