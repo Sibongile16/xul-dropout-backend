@@ -659,7 +659,7 @@ class StudentClassListResponse(BaseModel):
     age: int
     gender: str
     is_active: bool
-    attendance_status: str
+    attendance_status: Optional[str] = None
     guardian: GuardianResponse
 
 
