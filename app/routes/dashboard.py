@@ -9,7 +9,7 @@ from app.crud.prediction import fetch_student_data, save_prediction_to_db
 from app.database import get_db
 from app.models.all_models import (
     BullyingIncident, RiskLevel, Student, Teacher, TeacherClass, User, Class, AcademicTerm, 
-    DropoutPrediction, StudentStatus
+    DropoutPrediction, StudentStatus, UserRole
 )
 from app.schemas.ml_model import PredictionResponse
 from app.services.ml_model import generate_recommendations, get_contributing_factors
@@ -20,26 +20,88 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
-async def get_teacher_class_ids(
+async def get_accessible_class_ids(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> List[UUID]:
-    """Get all class IDs that the current teacher is assigned to"""
-    if not current_user.teacher:
-        raise HTTPException(status_code=403, detail="Only teachers can access this data")
+    """Get all class IDs that the current user can access"""
     
-    teacher_classes = db.query(TeacherClass.class_id).filter(
-        TeacherClass.teacher_id == current_user.teacher.id
-    ).all()
+    # If user is headteacher, return all active class IDs
+    if current_user.role == UserRole.HEADTEACHER:
+        all_classes = db.query(Class.id).filter(Class.is_active == True).all()
+        return [class_.id for class_ in all_classes]
     
-    return [tc.class_id for tc in teacher_classes]
+    # If user is teacher, return only assigned classes
+    if current_user.role == UserRole.TEACHER:
+        if not current_user.teacher:
+            raise HTTPException(status_code=403, detail="Teacher profile not found")
+        
+        teacher_classes = db.query(TeacherClass.class_id).filter(
+            TeacherClass.teacher_id == current_user.teacher.id
+        ).all()
+        return [tc.class_id for tc in teacher_classes]
+    
+    # Admin or other roles - you can define their access as needed
+    if current_user.role == UserRole.ADMIN:
+        all_classes = db.query(Class.id).filter(Class.is_active == True).all()
+        return [class_.id for class_ in all_classes]
+    
+    # Default: no access
+    return []
 
-async def teacher_students_only(
+async def get_accessible_students_query(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ) -> Query:
-    class_ids = await get_teacher_class_ids(current_user, db)
+    """Get query for students that the current user can access"""
+    class_ids = await get_accessible_class_ids(current_user, db)
     return db.query(Student).filter(Student.class_id.in_(class_ids))
+
+async def verify_student_access(
+    student_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Student:
+    """Verify that the current user can access the given student"""
+    class_ids = await get_accessible_class_ids(current_user, db)
+    
+    student = db.query(Student).filter(
+        Student.id == student_id,
+        Student.class_id.in_(class_ids)
+    ).first()
+    
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student not found or access denied"
+        )
+    
+    return student
+
+async def verify_class_access(
+    class_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Class:
+    """Verify that the current user can access the given class"""
+    class_ids = await get_accessible_class_ids(current_user, db)
+    
+    if class_id not in class_ids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this class"
+        )
+    
+    class_ = db.query(Class).filter(Class.id == class_id).first()
+    if not class_:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Class not found"
+        )
+    
+    return class_
+
+# Keep existing response models
 class StudentRiskResponse(BaseModel):
     id: UUID
     name: str
@@ -104,18 +166,25 @@ class TeacherProfile(BaseModel):
     qualification: Optional[str]
     experience_years: Optional[int]
 
+class UserProfile(BaseModel):
+    id: str
+    username: str
+    email: str
+    role: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    phone_number: Optional[str] = None
+    qualification: Optional[str] = None
+    experience_years: Optional[int] = None
+
 @router.get("/students/class/{class_id}", response_model=DashboardClassResponse)
 async def get_students_by_class(
     class_id: UUID,
-    class_ids: List[UUID] = Depends(get_teacher_class_ids),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Verify the requested class is one the teacher teaches
-    if class_id not in class_ids:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not teach this class"
-        )
+    # Verify access to the class
+    await verify_class_access(class_id, current_user, db)
 
     # Get latest predictions subquery
     latest_predictions_subq = db.query(
@@ -206,9 +275,11 @@ async def get_students_by_class(
 
 @router.get("/stats", response_model=DashboardStats)
 async def get_dashboard_stats(
-    class_ids: List[UUID] = Depends(get_teacher_class_ids),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    class_ids = await get_accessible_class_ids(current_user, db)
+    
     if not class_ids:
         return DashboardStats(
             total_students=0,
@@ -217,7 +288,7 @@ async def get_dashboard_stats(
             average_attendance=0
         )
 
-    # Total students in teacher's classes
+    # Total students in accessible classes
     total_students = db.query(Student).filter(
         Student.class_id.in_(class_ids),
         Student.status == StudentStatus.ACTIVE
@@ -259,9 +330,11 @@ async def get_dashboard_stats(
 
 @router.get("/risk-distribution", response_model=RiskDistribution)
 async def get_risk_distribution(
-    class_ids: List[UUID] = Depends(get_teacher_class_ids),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    class_ids = await get_accessible_class_ids(current_user, db)
+    
     if not class_ids:
         return RiskDistribution(low=0, medium=0, high=0, critical=0)
 
@@ -300,9 +373,11 @@ async def get_risk_distribution(
 @router.get("/students/recent", response_model=List[StudentSummary])
 async def get_recent_students(
     limit: int = 10,
-    class_ids: List[UUID] = Depends(get_teacher_class_ids),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    class_ids = await get_accessible_class_ids(current_user, db)
+    
     if not class_ids:
         return []
 
@@ -345,9 +420,11 @@ async def get_recent_students(
 
 @router.get("/students/at-risk", response_model=List[AtRiskStudent])
 async def get_at_risk_students(
-    class_ids: List[UUID] = Depends(get_teacher_class_ids),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    class_ids = await get_accessible_class_ids(current_user, db)
+    
     if not class_ids:
         return []
 
@@ -398,11 +475,44 @@ async def get_at_risk_students(
     
     return result
 
+@router.get("/profile", response_model=UserProfile)
+async def get_user_profile(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    profile_data = {
+        "id": str(current_user.id),
+        "username": current_user.username,
+        "email": current_user.email,
+        "role": current_user.role.value
+    }
+    
+    # If user is a teacher, add teacher-specific information
+    if current_user.teacher:
+        teacher = db.query(Teacher).filter(Teacher.id == current_user.teacher.id).first()
+        if teacher:
+            profile_data.update({
+                "first_name": teacher.first_name,
+                "last_name": teacher.last_name,
+                "phone_number": teacher.phone_number,
+                "qualification": teacher.qualification,
+                "experience_years": teacher.experience_years
+            })
+    
+    return UserProfile(**profile_data)
+
+# Updated endpoint - now deprecated, use /profile instead
 @router.get("/teacher/profile", response_model=TeacherProfile)
 async def get_teacher_profile(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    if not current_user.teacher:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only teachers can access this endpoint"
+        )
+    
     teacher_with_user = db.query(Teacher).options(
         joinedload(Teacher.user)
     ).filter(Teacher.id == current_user.teacher.id).first()
@@ -420,21 +530,12 @@ async def get_teacher_profile(
 @router.post("/students/{student_id}/predict-risk")
 async def predict_student_risk(
     student_id: str,
-    class_ids: List[UUID] = Depends(get_teacher_class_ids),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     try:
-        # Verify student is in teacher's classes
-        student = db.query(Student).filter(
-            Student.id == student_id,
-            Student.class_id.in_(class_ids)
-        ).first()
-        
-        if not student:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Student not found in your classes"
-            )
+        # Verify access to student
+        student = await verify_student_access(UUID(student_id), current_user, db)
         
         student_data = await fetch_student_data(student_id, db)
         if not student_data:
@@ -487,20 +588,12 @@ async def predict_student_risk(
 @router.get("/students/{student_id}/detailed-data")
 async def get_student_detailed_data(
     student_id: UUID,
-    class_ids: List[UUID] = Depends(get_teacher_class_ids),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     try:
-        student = db.query(Student).filter(
-            Student.id == student_id,
-            Student.class_id.in_(class_ids)
-        ).first()
-        
-        if not student:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Student not found in your classes"
-            )
+        # Verify access to student
+        student = await verify_student_access(student_id, current_user, db)
         
         student_data = await fetch_student_data(student_id, db)
         if not student_data:
@@ -546,10 +639,12 @@ async def get_student_detailed_data(
 @router.post("/students/batch-predict")
 async def batch_predict_students(
     background_tasks: BackgroundTasks,
-    class_ids: List[UUID] = Depends(get_teacher_class_ids),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     try:
+        class_ids = await get_accessible_class_ids(current_user, db)
+        
         if not class_ids:
             return {
                 "message": "No students to predict",
@@ -582,20 +677,11 @@ async def batch_predict_students(
 @router.get("/students/{student_id}/bullying-incidents")
 async def get_student_bullying_incidents(
     student_id: UUID,
-    class_ids: List[UUID] = Depends(get_teacher_class_ids),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Verify student is in teacher's classes
-    student = db.query(Student).filter(
-        Student.id == student_id,
-        Student.class_id.in_(class_ids)
-    ).first()
-    
-    if not student:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Student not found in your classes"
-        )
+    # Verify access to student
+    student = await verify_student_access(student_id, current_user, db)
     
     incidents = db.query(BullyingIncident).filter(
         BullyingIncident.student_id == student_id
@@ -611,6 +697,41 @@ async def get_student_bullying_incidents(
         "is_addressed": incident.is_addressed,
         "action_taken": incident.action_taken
     } for incident in incidents]
+
+@router.get("/classes", response_model=List[Dict])
+async def get_accessible_classes(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all classes that the current user can access"""
+    class_ids = await get_accessible_class_ids(current_user, db)
+    
+    if not class_ids:
+        return []
+    
+    classes = db.query(Class).filter(
+        Class.id.in_(class_ids),
+        Class.is_active == True
+    ).all()
+    
+    result = []
+    for class_ in classes:
+        # Get student count for each class
+        student_count = db.query(Student).filter(
+            Student.class_id == class_.id,
+            Student.status == StudentStatus.ACTIVE
+        ).count()
+        
+        result.append({
+            "id": str(class_.id),
+            "name": class_.name,
+            "code": class_.code,
+            "academic_year": class_.academic_year,
+            "capacity": class_.capacity,
+            "current_students": student_count
+        })
+    
+    return result
 
 async def process_batch_predictions(student_ids: List[str], db: Session):
     """Background task to process batch predictions"""
