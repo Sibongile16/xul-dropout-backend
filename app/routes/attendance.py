@@ -7,7 +7,7 @@ from typing import List, Optional
 from datetime import date, datetime
 
 from app.database import get_db
-from app.models.all_models import Class, DailyAttendance, Student, Teacher, TeacherClass, User, UserRole
+from app.models.all_models import Class, DailyAttendance, Student, StudentStatus, Teacher, TeacherClass, User, UserRole
 from app.utils.auth import get_current_user
 
 router = APIRouter(prefix="/api/attendance", tags=["Attendance"])
@@ -361,13 +361,14 @@ def get_class_attendance_stats(
     """
     Get attendance statistics for a class over a date range.
     Teachers can only view stats for their own classes.
+    Headteachers can view stats for any class.
     """
     # Check if class exists
     class_ = db.query(Class).filter(Class.id == class_id).first()
     if not class_:
         raise HTTPException(status_code=404, detail="Class not found")
     
-    # For teachers, verify they teach this class
+    # For teachers (not headteachers), verify they teach this class
     if current_user.role == UserRole.TEACHER:
         teacher = db.query(Teacher).filter(Teacher.user_id == current_user.id).first()
         if not teacher:
@@ -380,6 +381,16 @@ def get_class_attendance_stats(
         if not teacher_class:
             raise HTTPException(status_code=403, detail="Not authorized to view attendance for this class")
     
+    # Headteachers (UserRole.HEADTEACHER) can access any class without additional checks
+    
+    # Get all active students in the class
+    active_students = db.query(Student).filter(
+        Student.class_id == class_id,
+        Student.status == StudentStatus.ACTIVE
+    ).all()
+    
+    total_students = len(active_students)
+    
     # Get all attendance records for the class in the date range
     attendance_records = db.query(DailyAttendance).filter(
         DailyAttendance.class_id == class_id,
@@ -388,25 +399,29 @@ def get_class_attendance_stats(
     ).all()
     
     # Calculate statistics
-    total_records = len(attendance_records)
     present_count = sum(1 for record in attendance_records if record.status == AttendanceStatus.PRESENT)
     absent_count = sum(1 for record in attendance_records if record.status == AttendanceStatus.ABSENT)
     late_count = sum(1 for record in attendance_records if record.status == AttendanceStatus.LATE)
     
-    attendance_rate = (present_count / total_records * 100) if total_records > 0 else 0
+    # Calculate total possible attendance days (students * days in range)
+    days_in_range = (end_date - start_date).days + 1
+    total_possible_attendance = total_students * days_in_range
+    
+    attendance_rate = (present_count / total_possible_attendance * 100) if total_possible_attendance > 0 else 0
     
     return AttendanceStatsResponse(
         class_id=class_id,
         class_name=class_.name,
         start_date=start_date,
         end_date=end_date,
-        total_records=total_records,
+        total_records=total_students,  # Now shows number of active students
         present_count=present_count,
         absent_count=absent_count,
         late_count=late_count,
         attendance_rate=round(attendance_rate, 2)
     )
-
+    
+    
 @router.get("/student/{student_id}/summary", response_model=AttendanceSummaryResponse)
 def get_student_attendance_summary(
     student_id: UUID,
